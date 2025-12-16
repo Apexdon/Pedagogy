@@ -1,0 +1,48 @@
+# =============================================
+# PEDAGOGY BACKEND DEPENDENCIES
+# =============================================
+
+# FastAPI Framework (latest versions for Python 3.14 compatibility)
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+
+# Database
+sqlalchemy>=2.0.36
+aiosqlite>=0.20.0
+# asyncpg>=0.30.0  # Uncomment when using PostgreSQL
+alembic>=1.14.0
+
+# Pydantic & Settings (latest for Python 3.14)
+pydantic>=2.10.0
+pydantic-settings>=2.6.0
+email-validator>=2.2.0
+
+# Security
+passlib[bcrypt]>=1.7.4
+python-jose[cryptography]>=3.3.0
+
+# HTTP & Multipart
+httpx>=0.28.0
+python-multipart>=0.0.17
+
+# Environment
+python-dotenv>=1.0.1
+
+# =============================================
+# PHASE 3: KNOWLEDGE BASE & RAG SYSTEM
+# =============================================
+
+# ChromaDB - Vector Database
+chromadb>=0.4.22
+
+# Document Parsing
+PyMuPDF>=1.23.0
+python-docx>=1.1.0
+markdown>=3.5.0
+beautifulsoup4>=4.12.0
+
+# Embeddings
+sentence-transformers>=2.2.2
+
+# Async File Operations
+aiofiles>=23.2.0

@@ -1,0 +1,33 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node --version)",
+      "Bash(npm --version:*)",
+      "Bash(rustc:*)",
+      "Bash(cargo --version:*)",
+      "Bash(docker:*)",
+      "Bash(git --version:*)",
+      "Bash(git init:*)",
+      "Bash(./venv/Scripts/pip:*)",
+      "Bash(curl:*)",
+      "Bash(./venv/Scripts/python:*)",
+      "Bash(npm install:*)",
+      "Bash(npx tailwindcss init -p)",
+      "Bash(./node_modules/.bin/tailwindcss:*)",
+      "Bash(npm run build:*)",
+      "Bash(docker-compose up:*)",
+      "Bash(start \"\" \"C:\\Program Files\\Docker\\Docker\\Docker Desktop.exe\")",
+      "Bash(start \"\" \"%ProgramFiles%\\Docker\\Docker\\Docker Desktop.exe\")",
+      "Bash(wsl --shutdown)",
+      "Bash(wsl --status:*)",
+      "Bash(taskkill:*)",
+      "Bash(npx tauri init:*)",
+      "Bash(where link.exe:*)",
+      "Bash(dir \"C:\\Program Files\\Microsoft Visual Studio\\2022\\*\\VC\\Tools\\MSVC\\*\\bin\\Hostx64\\x64\\link.exe\")",
+      "Bash(dir \"C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\*\\VC\\Tools\\MSVC\\*\\bin\\Hostx64\\x64\\link.exe\")",
+      "Bash(find:*)",
+      "Bash(tasklist:*)",
+      "Bash(findstr:*)"
+    ]
+  }
+}
