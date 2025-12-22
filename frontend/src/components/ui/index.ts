@@ -5,3 +5,4 @@ export { Loading, PageLoading } from './Loading';
 export { ToastContainer } from './Toast';
 export { SearchableSelect } from './SearchableSelect';
 export type { SelectOption } from './SearchableSelect';
+export { SlidePanel } from './SlidePanel';

@@ -26,7 +26,12 @@ from app.schemas.organisation import (
     AddMemberResponse,
     MemberResponse,
     OrganisationListItem,
+    OrgDashboardStats,
+    TeamMemberSummary,
+    KnowledgeBaseSummary,
+    RecentActivityItem,
 )
+from app.models.knowledge import KnowledgeBase, Document, DocumentChunk
 from typing import List
 
 router = APIRouter()
@@ -285,6 +290,191 @@ async def get_onboarding_status(
         checklist=checklist,
         completion_percentage=percentage,
         pending_items=pending_items,
+    )
+
+
+@router.get("/dashboard", response_model=OrgDashboardStats)
+async def get_org_dashboard_stats(
+    current_user: User = Depends(get_current_user),
+    membership: UserOrganisation = Depends(require_role(["org_admin", "manager"])),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Get comprehensive dashboard statistics for org admin/manager.
+
+    Returns overview stats, team members, knowledge base summary,
+    and recent activity for the organisation dashboard.
+    """
+    org_id = membership.org_id
+
+    # Get organisation
+    result = await db.execute(select(Organisation).where(Organisation.org_id == org_id))
+    organisation = result.scalar_one_or_none()
+
+    if not organisation:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Organisation not found"
+        )
+
+    # Get total members count
+    result = await db.execute(
+        select(func.count(UserOrganisation.id)).where(UserOrganisation.org_id == org_id)
+    )
+    total_members = result.scalar() or 0
+
+    # Get members by role
+    result = await db.execute(
+        select(UserOrganisation.role, func.count(UserOrganisation.id))
+        .where(UserOrganisation.org_id == org_id)
+        .group_by(UserOrganisation.role)
+    )
+    role_counts = {role: count for role, count in result.all()}
+
+    # Get team members (latest 10)
+    result = await db.execute(
+        select(UserOrganisation)
+        .options(selectinload(UserOrganisation.user))
+        .where(UserOrganisation.org_id == org_id)
+        .order_by(UserOrganisation.joined_at.desc())
+        .limit(10)
+    )
+    memberships = result.scalars().all()
+
+    team_members = [
+        TeamMemberSummary(
+            user_id=m.user.user_id,
+            full_name=m.user.full_name,
+            email=m.user.email,
+            role=m.role,
+            joined_at=m.joined_at,
+        )
+        for m in memberships
+    ]
+
+    # Get knowledge base stats
+    result = await db.execute(
+        select(func.count(KnowledgeBase.kb_id)).where(KnowledgeBase.org_id == org_id)
+    )
+    total_knowledge_bases = result.scalar() or 0
+
+    # Get document stats
+    result = await db.execute(
+        select(func.count(Document.doc_id))
+        .join(KnowledgeBase, Document.kb_id == KnowledgeBase.kb_id)
+        .where(KnowledgeBase.org_id == org_id)
+    )
+    total_documents = result.scalar() or 0
+
+    # Get chunk stats
+    result = await db.execute(
+        select(func.count(DocumentChunk.chunk_id))
+        .join(Document, DocumentChunk.doc_id == Document.doc_id)
+        .join(KnowledgeBase, Document.kb_id == KnowledgeBase.kb_id)
+        .where(KnowledgeBase.org_id == org_id)
+    )
+    total_chunks = result.scalar() or 0
+
+    # Get document processing status counts
+    result = await db.execute(
+        select(Document.status, func.count(Document.doc_id))
+        .join(KnowledgeBase, Document.kb_id == KnowledgeBase.kb_id)
+        .where(KnowledgeBase.org_id == org_id)
+        .group_by(Document.status)
+    )
+    processing_status = {status: count for status, count in result.all()}
+
+    # Get recent document uploads (last 5)
+    result = await db.execute(
+        select(Document)
+        .join(KnowledgeBase, Document.kb_id == KnowledgeBase.kb_id)
+        .where(KnowledgeBase.org_id == org_id)
+        .order_by(Document.uploaded_at.desc())
+        .limit(5)
+    )
+    recent_docs = result.scalars().all()
+    recent_uploads = [
+        {
+            "doc_id": doc.doc_id,
+            "doc_name": doc.doc_name,
+            "doc_type": doc.doc_type,
+            "status": doc.status,
+            "uploaded_at": doc.uploaded_at.isoformat() if doc.uploaded_at else None,
+        }
+        for doc in recent_docs
+    ]
+
+    # Calculate onboarding completion
+    checklist = {
+        "organisation_configured": True,
+        "logo_uploaded": organisation.logo_path is not None,
+        "knowledge_base_uploaded": total_documents > 0,
+        "first_user_invited": total_members > 1,
+        "test_session_completed": False,  # TODO: implement when sessions exist
+    }
+    completed = sum(1 for v in checklist.values() if v)
+    onboarding_completion = int((completed / len(checklist)) * 100)
+
+    pending_setup_items = []
+    if not checklist["logo_uploaded"]:
+        pending_setup_items.append("Upload organisation logo")
+    if not checklist["knowledge_base_uploaded"]:
+        pending_setup_items.append("Upload knowledge base documents")
+    if not checklist["first_user_invited"]:
+        pending_setup_items.append("Invite team members")
+    if not checklist["test_session_completed"]:
+        pending_setup_items.append("Complete a test guidance session")
+
+    # Build recent activities (combine member joins and document uploads)
+    activities = []
+
+    # Add member join activities
+    for m in memberships[:5]:
+        activities.append(
+            RecentActivityItem(
+                activity_id=f"member_{m.user.user_id}",
+                activity_type="member_joined",
+                description=f"{m.user.full_name or m.user.email} joined the organisation",
+                timestamp=m.joined_at,
+                user_name=m.user.full_name or m.user.email,
+                metadata={"role": m.role},
+            )
+        )
+
+    # Add document upload activities
+    for doc in recent_docs:
+        activities.append(
+            RecentActivityItem(
+                activity_id=f"doc_{doc.doc_id}",
+                activity_type="document_uploaded",
+                description=f"Document '{doc.doc_name}' was uploaded",
+                timestamp=doc.uploaded_at,
+                metadata={"doc_type": doc.doc_type, "status": doc.status},
+            )
+        )
+
+    # Sort activities by timestamp and take top 10
+    activities.sort(key=lambda x: x.timestamp, reverse=True)
+    recent_activities = activities[:10]
+
+    return OrgDashboardStats(
+        total_members=total_members,
+        total_documents=total_documents,
+        total_sessions=0,  # TODO: implement when sessions exist
+        total_knowledge_bases=total_knowledge_bases,
+        onboarding_completion=onboarding_completion,
+        pending_setup_items=pending_setup_items,
+        recent_activities=recent_activities,
+        team_members=team_members,
+        members_by_role=role_counts,
+        knowledge_base=KnowledgeBaseSummary(
+            total_documents=total_documents,
+            total_chunks=total_chunks,
+            recent_uploads=recent_uploads,
+            processing_status=processing_status,
+        ),
+        sessions_this_week=0,
+        sessions_trend="stable",
     )
 
 

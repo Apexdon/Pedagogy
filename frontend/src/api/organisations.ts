@@ -10,6 +10,7 @@ import type {
   AddMemberResponse,
   UpdateProfileRequest,
   UpdateProfileResponse,
+  OrgDashboardStats,
 } from '@/types';
 
 /**
@@ -108,5 +109,13 @@ export const joinOrganisation = async (orgId: string): Promise<AddMemberResponse
       },
     }
   );
+  return response.data;
+};
+
+/**
+ * Get organisation dashboard stats (org_admin/manager only)
+ */
+export const getOrgDashboardStats = async (): Promise<OrgDashboardStats> => {
+  const response = await apiClient.get<OrgDashboardStats>('/org/dashboard');
   return response.data;
 };

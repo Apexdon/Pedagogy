@@ -92,6 +92,7 @@ export function SelectOrgPage() {
           org_slug: org.org_slug,
           role: response.member.role,
           is_default: false,
+          joined_at: response.member.joined_at,
         };
         setOrganisations([...organisations, newOrgInfo]);
         setSelectedOrgToJoin(null);

@@ -905,8 +905,8 @@ async def query_rag(
 # Phase 4: Computer Vision Pipeline
 
 ## 4.1 Objectives
-- Set up YOLO for UI element detection
-- Implement PaddleOCR for text extraction
+- Set up YOLO V11 for UI element detection
+- Implement EasyOCR for text extraction
 - Build screen state fusion engine
 - Create CV processing API
 

@@ -143,3 +143,70 @@ class OrganisationListItem(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class RecentActivityItem(BaseModel):
+    """Schema for a recent activity item."""
+    activity_id: str
+    activity_type: str  # member_joined, document_uploaded, session_completed, etc.
+    description: str
+    timestamp: datetime
+    user_name: Optional[str] = None
+    metadata: Dict[str, Any] = {}
+
+
+class TeamMemberSummary(BaseModel):
+    """Schema for team member summary in dashboard."""
+    user_id: str
+    full_name: Optional[str] = None
+    email: str
+    role: str
+    joined_at: datetime
+
+
+class KnowledgeBaseSummary(BaseModel):
+    """Schema for knowledge base summary in dashboard."""
+    total_documents: int
+    total_chunks: int
+    recent_uploads: List[Dict[str, Any]] = []
+    processing_status: Dict[str, int] = {}  # pending, processing, completed, failed counts
+
+
+class OrgDashboardStats(BaseModel):
+    """Schema for org admin dashboard statistics."""
+    # Overview stats
+    total_members: int
+    total_documents: int
+    total_sessions: int
+    total_knowledge_bases: int
+
+    # Onboarding progress
+    onboarding_completion: int  # percentage
+    pending_setup_items: List[str] = []
+
+    # Recent activity
+    recent_activities: List[RecentActivityItem] = []
+
+    # Team overview
+    team_members: List[TeamMemberSummary] = []
+    members_by_role: Dict[str, int] = {}  # role -> count
+
+    # Knowledge base summary
+    knowledge_base: KnowledgeBaseSummary
+
+    # Analytics preview (placeholders for now)
+    sessions_this_week: int = 0
+    sessions_trend: str = "stable"  # up, down, stable
+
+
+class UpdateProfileRequest(BaseModel):
+    """Schema for updating organisation profile."""
+    org_name: Optional[str] = Field(None, min_length=1, max_length=255)
+    primary_color: Optional[str] = Field(None, pattern="^#[0-9A-Fa-f]{6}$")
+
+
+class UpdateProfileResponse(BaseModel):
+    """Schema for update profile response."""
+    success: bool = True
+    message: str
+    organisation: OrganisationResponse

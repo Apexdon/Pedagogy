@@ -257,6 +257,55 @@ async def select_organisation(
     )
 
 
+@router.post("/switch-organisation", response_model=SelectOrgResponse)
+async def switch_organisation(
+    selection: SelectOrganisation,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Switch to a different organisation (for already authenticated users).
+
+    Use this endpoint when you have a valid access token and want to switch
+    to a different organisation. Returns new tokens for the selected org.
+
+    - **org_id**: Organisation ID to switch to
+    """
+    # Verify user belongs to this organisation
+    result = await db.execute(
+        select(UserOrganisation)
+        .options(selectinload(UserOrganisation.organisation))
+        .where(
+            UserOrganisation.user_id == current_user.user_id,
+            UserOrganisation.org_id == selection.org_id
+        )
+    )
+    membership = result.scalar_one_or_none()
+
+    if not membership:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You are not a member of this organisation"
+        )
+
+    if not membership.organisation.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Organisation is not active"
+        )
+
+    # Create new tokens with the new org context
+    tokens = create_tokens(current_user.user_id, membership.org_id, membership.role)
+
+    return SelectOrgResponse(
+        success=True,
+        user=UserResponse.model_validate(current_user),
+        organisation=OrganisationBasic.model_validate(membership.organisation),
+        role=membership.role,
+        tokens=Token(**tokens),
+    )
+
+
 @router.post("/logout")
 async def logout(
     logout_data: LogoutRequest = None,

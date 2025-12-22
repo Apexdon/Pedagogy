@@ -116,3 +116,47 @@ export interface UpdateProfileResponse {
   message: string;
   organisation: Organisation;
 }
+
+// Org Dashboard types
+export interface RecentActivityItem {
+  activity_id: string;
+  activity_type: 'member_joined' | 'document_uploaded' | 'kb_created' | 'settings_updated';
+  description: string;
+  timestamp: string;
+  user_name?: string;
+  metadata: Record<string, unknown>;
+}
+
+export interface TeamMemberSummary {
+  user_id: string;
+  full_name?: string;
+  email: string;
+  role: string;
+  joined_at: string;
+}
+
+export interface KnowledgeBaseSummary {
+  total_documents: number;
+  total_chunks: number;
+  recent_uploads: Array<{
+    doc_id: string;
+    file_name: string;
+    uploaded_at: string;
+  }>;
+  processing_status: Record<string, number>;
+}
+
+export interface OrgDashboardStats {
+  total_members: number;
+  total_documents: number;
+  total_sessions: number;
+  total_knowledge_bases: number;
+  onboarding_completion: number;
+  pending_setup_items: string[];
+  recent_activities: RecentActivityItem[];
+  team_members: TeamMemberSummary[];
+  members_by_role: Record<string, number>;
+  knowledge_base: KnowledgeBaseSummary;
+  sessions_this_week: number;
+  sessions_trend: 'up' | 'down' | 'stable';
+}

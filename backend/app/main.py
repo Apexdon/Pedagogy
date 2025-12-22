@@ -73,20 +73,30 @@ async def database_health(db: AsyncSession = Depends(get_db)):
 @app.get("/health/services")
 async def services_health(db: AsyncSession = Depends(get_db)):
     """Detailed services health check."""
+    from app.services.cv_service import get_cv_service
+
     db_status = "healthy"
     try:
         await db.execute(text("SELECT 1"))
     except Exception:
         db_status = "unhealthy"
 
+    # Check CV pipeline status
+    cv_status = "ready"
+    try:
+        cv_service = get_cv_service()
+        cv_health = await cv_service.get_health_status()
+        cv_status = cv_health.status
+    except Exception:
+        cv_status = "unhealthy"
+
     return {
         "status": "healthy" if db_status == "healthy" else "degraded",
         "services": {
             "api": {"status": "healthy"},
             "database": {"status": db_status},
-            "vector_db": {"status": "pending_setup"},
-            "cv_pipeline": {"status": "pending_setup"},
-            "ocr_service": {"status": "pending_setup"},
+            "vector_db": {"status": "ready"},
+            "cv_pipeline": {"status": cv_status},
             "ai_engine": {"status": "pending_setup"}
         }
     }

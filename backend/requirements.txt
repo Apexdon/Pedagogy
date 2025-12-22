@@ -1,3 +1,4 @@
+
 # =============================================
 # PEDAGOGY BACKEND DEPENDENCIES
 # =============================================
@@ -46,3 +47,24 @@ sentence-transformers>=2.2.2
 
 # Async File Operations
 aiofiles>=23.2.0
+
+# =============================================
+# PHASE 4: COMPUTER VISION PIPELINE
+# =============================================
+
+# UI Element Detection
+# OmniParser v2 (Microsoft) - uses YOLOv8 + Florence-2
+ultralytics>=8.0.0
+transformers>=4.36.0
+huggingface-hub>=0.20.0
+
+# EasyOCR Text Extraction
+easyocr>=1.7.0
+
+# Image Processing
+opencv-python-headless>=4.8.0
+Pillow>=10.0.0
+
+# PyTorch (required for OmniParser Florence-2 model)
+# CPU version - for GPU, install torch with CUDA support separately
+torch>=2.0.0

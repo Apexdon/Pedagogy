@@ -1,4 +1,4 @@
-import apiClient, { setPreliminaryToken, getPreliminaryToken, clearPreliminaryToken, setTokens, clearTokens } from './client';
+import apiClient, { setPreliminaryToken, getPreliminaryToken, clearPreliminaryToken, setTokens, clearTokens, getAccessToken } from './client';
 import type {
   UserRegisterRequest,
   UserLoginRequest,
@@ -38,10 +38,16 @@ export const login = async (data: UserLoginRequest): Promise<LoginResponse> => {
 };
 
 /**
- * Select an organisation and get full access tokens
+ * Select an organisation and get full access tokens (initial login flow)
  */
 export const selectOrganisation = async (data: SelectOrganisationRequest): Promise<SelectOrgResponse> => {
   const preliminaryToken = getPreliminaryToken();
+  const accessToken = getAccessToken();
+
+  // If user has access token but no preliminary token, use switch endpoint
+  if (accessToken && !preliminaryToken) {
+    return switchOrganisation(data);
+  }
 
   if (!preliminaryToken) {
     throw new Error('No preliminary token found. Please login again.');
@@ -61,6 +67,23 @@ export const selectOrganisation = async (data: SelectOrganisationRequest): Promi
   if (response.data.tokens) {
     setTokens(response.data.tokens);
     clearPreliminaryToken();
+  }
+
+  return response.data;
+};
+
+/**
+ * Switch organisation for an already authenticated user
+ */
+export const switchOrganisation = async (data: SelectOrganisationRequest): Promise<SelectOrgResponse> => {
+  const response = await apiClient.post<SelectOrgResponse>(
+    '/auth/switch-organisation',
+    data
+  );
+
+  // Store new tokens
+  if (response.data.tokens) {
+    setTokens(response.data.tokens);
   }
 
   return response.data;

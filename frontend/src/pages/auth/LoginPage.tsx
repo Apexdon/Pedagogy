@@ -65,9 +65,10 @@ export function LoginPage() {
 
       // For org_admin/manager users, backend returns full tokens directly
       if (!response.requires_org_selection && response.tokens && response.organisation && response.role) {
-        console.log('Org admin detected, navigating to dashboard');
+        console.log('Org admin detected, navigating to org dashboard');
         selectOrganisation(response.organisation, response.role);
-        navigate('/dashboard');
+        // Redirect org admins and managers to the org dashboard
+        navigate('/org/dashboard');
         return;
       }
 

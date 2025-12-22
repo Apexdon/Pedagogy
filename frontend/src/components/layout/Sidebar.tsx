@@ -65,20 +65,34 @@ const userNavItems = [
       </svg>
     ),
   },
-];
-
-// Org admin navigation items (only for org_admin and manager roles)
-const orgAdminNavItems = [
   {
-    name: 'Org Dashboard',
-    path: '/org/profile',
+    name: 'Detection Test',
+    path: '/detection-test',
     icon: (
       <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
         <path
           strokeLinecap="round"
           strokeLinejoin="round"
           strokeWidth={2}
-          d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"
+          d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"
+        />
+      </svg>
+    ),
+  },
+];
+
+// Org admin navigation items (only for org_admin and manager roles)
+const orgAdminNavItems = [
+  {
+    name: 'Home',
+    path: '/org/dashboard',
+    icon: (
+      <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          strokeWidth={2}
+          d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"
         />
       </svg>
     ),
@@ -111,6 +125,20 @@ const orgAdminNavItems = [
       </svg>
     ),
   },
+  {
+    name: 'Org Settings',
+    path: '/org/profile',
+    icon: (
+      <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          strokeWidth={2}
+          d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"
+        />
+      </svg>
+    ),
+  },
 ];
 
 export function Sidebar() {
@@ -118,6 +146,9 @@ export function Sidebar() {
   const { role } = useAuthStore();
 
   const isOrgAdmin = role === 'org_admin' || role === 'manager';
+
+  // Show different nav based on role
+  const navItems = isOrgAdmin ? orgAdminNavItems : userNavItems;
 
   if (!isSidebarOpen) return null;
 
@@ -132,9 +163,9 @@ export function Sidebar() {
           <span className="text-xl font-bold text-gray-900">Pedagogy</span>
         </div>
 
-        {/* User Navigation */}
+        {/* Navigation - different for org admins vs regular users */}
         <nav className="space-y-1">
-          {userNavItems.map((item) => (
+          {navItems.map((item) => (
             <NavLink
               key={item.path}
               to={item.path}
@@ -151,35 +182,6 @@ export function Sidebar() {
             </NavLink>
           ))}
         </nav>
-
-        {/* Org Admin Section */}
-        {isOrgAdmin && (
-          <>
-            <div className="mt-8 mb-3 px-3">
-              <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">
-                Organisation Admin
-              </p>
-            </div>
-            <nav className="space-y-1">
-              {orgAdminNavItems.map((item) => (
-                <NavLink
-                  key={item.path}
-                  to={item.path}
-                  className={({ isActive }) =>
-                    `flex items-center gap-3 px-3 py-2 rounded-lg transition-colors ${
-                      isActive
-                        ? 'bg-primary-50 text-primary-600'
-                        : 'text-gray-600 hover:bg-gray-100'
-                    }`
-                  }
-                >
-                  {item.icon}
-                  <span className="font-medium">{item.name}</span>
-                </NavLink>
-              ))}
-            </nav>
-          </>
-        )}
       </div>
     </aside>
   );

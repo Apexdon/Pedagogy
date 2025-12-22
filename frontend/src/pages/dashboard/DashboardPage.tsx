@@ -1,13 +1,20 @@
+import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Card, CardBody, CardHeader, Button } from '@/components/ui';
+import { Card, CardBody, CardHeader, Button, SlidePanel } from '@/components/ui';
+import { GuidanceChat } from '@/components/guidance';
 import { useAuthStore } from '@/stores';
 
 export function DashboardPage() {
   const navigate = useNavigate();
   const { user, selectedOrg } = useAuthStore();
+  const [isGuidancePanelOpen, setIsGuidancePanelOpen] = useState(false);
 
   const handleSwitchOrg = () => {
     navigate('/select-org');
+  };
+
+  const handleOpenGuidance = () => {
+    setIsGuidancePanelOpen(true);
   };
 
   return (
@@ -53,7 +60,7 @@ export function DashboardPage() {
         <h2 className="text-lg font-semibold text-gray-900 mb-4">Get Started</h2>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {/* Start Guidance Session */}
-          <Card hover className="cursor-pointer">
+          <Card hover className="cursor-pointer" onClick={handleOpenGuidance}>
             <CardBody className="text-center py-8">
               <div className="w-16 h-16 mx-auto rounded-full bg-primary-100 flex items-center justify-center mb-4">
                 <svg className="w-8 h-8 text-primary-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -84,7 +91,7 @@ export function DashboardPage() {
           </Card>
 
           {/* Ask a Question */}
-          <Card hover className="cursor-pointer">
+          <Card hover className="cursor-pointer" onClick={handleOpenGuidance}>
             <CardBody className="text-center py-8">
               <div className="w-16 h-16 mx-auto rounded-full bg-purple-100 flex items-center justify-center mb-4">
                 <svg className="w-8 h-8 text-purple-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -116,15 +123,15 @@ export function DashboardPage() {
         </CardBody>
       </Card>
 
-      {/* Hotkey hint */}
-      <div className="text-center text-sm text-gray-500 py-4">
-        <p>
-          <kbd className="px-2 py-1 bg-gray-100 rounded border border-gray-300 font-mono text-xs">
-            Ctrl+Shift+P
-          </kbd>
-          {' '}to start Pedagogy assistance anytime
-        </p>
-      </div>
+      {/* Guidance Panel */}
+      <SlidePanel
+        isOpen={isGuidancePanelOpen}
+        onClose={() => setIsGuidancePanelOpen(false)}
+        title="Guidance Session"
+        width="lg"
+      >
+        <GuidanceChat />
+      </SlidePanel>
     </div>
   );
 }

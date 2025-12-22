@@ -6,10 +6,10 @@ import { ProtectedRoute, PublicOnlyRoute } from './ProtectedRoute';
 import { LoginPage, RegisterPage, SelectOrgPage } from '@/pages/auth';
 
 // Dashboard pages
-import { DashboardPage, SettingsPage } from '@/pages/dashboard';
+import { DashboardPage, SettingsPage, GuidancePage, DetectionTestPage } from '@/pages/dashboard';
 
 // Organisation pages
-import { OnboardPage, ProfilePage, MembersPage } from '@/pages/org';
+import { OnboardPage, ProfilePage, MembersPage, OrgDashboardPage, KnowledgeBasePage } from '@/pages/org';
 
 export const router = createBrowserRouter([
   // Public routes
@@ -62,6 +62,26 @@ export const router = createBrowserRouter([
     ),
   },
   {
+    path: '/guidance',
+    element: (
+      <ProtectedRoute>
+        <DashboardLayout>
+          <GuidancePage />
+        </DashboardLayout>
+      </ProtectedRoute>
+    ),
+  },
+  {
+    path: '/org/dashboard',
+    element: (
+      <ProtectedRoute>
+        <DashboardLayout>
+          <OrgDashboardPage />
+        </DashboardLayout>
+      </ProtectedRoute>
+    ),
+  },
+  {
     path: '/org/profile',
     element: (
       <ProtectedRoute>
@@ -77,6 +97,26 @@ export const router = createBrowserRouter([
       <ProtectedRoute>
         <DashboardLayout>
           <MembersPage />
+        </DashboardLayout>
+      </ProtectedRoute>
+    ),
+  },
+  {
+    path: '/org/knowledge',
+    element: (
+      <ProtectedRoute>
+        <DashboardLayout>
+          <KnowledgeBasePage />
+        </DashboardLayout>
+      </ProtectedRoute>
+    ),
+  },
+  {
+    path: '/detection-test',
+    element: (
+      <ProtectedRoute>
+        <DashboardLayout>
+          <DetectionTestPage />
         </DashboardLayout>
       </ProtectedRoute>
     ),

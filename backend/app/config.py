@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     # CORS - Origins that can access the API
     CORS_ORIGINS: List[str] = [
         "http://localhost:3000",   # Vite dev server (React frontend)
+        "http://localhost:3001",   # Vite dev server (alternate port)
         "http://localhost:5173",   # Vite default port
         "http://localhost:1420",   # Tauri dev
         "tauri://localhost",       # Tauri production
@@ -60,14 +61,44 @@ class Settings(BaseSettings):
     DEFAULT_TOP_K: int = 5
     DEFAULT_MIN_SIMILARITY: float = 0.7
 
+    # =============================================
+    # CV Pipeline Configuration (Phase 4)
+    # =============================================
+
+    # UI Detection Backend: "omniparser" (recommended) or "yolo" (legacy)
+    CV_DETECTION_BACKEND: str = "omniparser"
+
+    # OmniParser v2 Settings (Microsoft's UI detection model)
+    # Download models: huggingface-cli download microsoft/OmniParser-v2.0 --local-dir weights
+    OMNIPARSER_ICON_DETECT_PATH: str = "weights/icon_detect/model.pt"
+    OMNIPARSER_ICON_CAPTION_PATH: str = "weights/icon_caption_florence"
+    OMNIPARSER_CONFIDENCE_THRESHOLD: float = 0.1  # Lower threshold for more detections
+    OMNIPARSER_IOU_THRESHOLD: float = 0.45
+    OMNIPARSER_ENABLE_CAPTIONING: bool = True
+
+    # Legacy YOLO v11 Settings (fallback if OmniParser not available)
+    YOLO_MODEL_PATH: str = "yolo11n.pt"
+    YOLO_CONFIDENCE_THRESHOLD: float = 0.5
+    YOLO_IOU_THRESHOLD: float = 0.45
+
+    # EasyOCR Settings
+    OCR_LANGUAGE: str = "en"
+    OCR_USE_GPU: bool = False
+    OCR_CONFIDENCE_THRESHOLD: float = 0.6
+
+    # CV Processing Settings
+    CV_MAX_IMAGE_SIZE_MB: int = 10
+    CV_SUPPORTED_FORMATS: List[str] = ["png", "jpg", "jpeg", "bmp", "webp"]
+    CV_DEFAULT_RESIZE_WIDTH: int = 1920
+    CV_DEFAULT_RESIZE_HEIGHT: int = 1080
+
     class Config:
         env_file = ".env"
         case_sensitive = True
 
 
-@lru_cache()
 def get_settings() -> Settings:
-    """Get cached settings instance."""
+    """Get settings instance."""
     return Settings()
 
 
