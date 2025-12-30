@@ -6,7 +6,7 @@ import { ProtectedRoute, PublicOnlyRoute } from './ProtectedRoute';
 import { LoginPage, RegisterPage, SelectOrgPage } from '@/pages/auth';
 
 // Dashboard pages
-import { DashboardPage, SettingsPage, GuidancePage, DetectionTestPage } from '@/pages/dashboard';
+import { DashboardPage, SettingsPage, GuidancePage, HistoryPage, DetectionTestPage } from '@/pages/dashboard';
 
 // Organisation pages
 import { OnboardPage, ProfilePage, MembersPage, OrgDashboardPage, KnowledgeBasePage } from '@/pages/org';
@@ -67,6 +67,16 @@ export const router = createBrowserRouter([
       <ProtectedRoute>
         <DashboardLayout>
           <GuidancePage />
+        </DashboardLayout>
+      </ProtectedRoute>
+    ),
+  },
+  {
+    path: '/history',
+    element: (
+      <ProtectedRoute>
+        <DashboardLayout>
+          <HistoryPage />
         </DashboardLayout>
       </ProtectedRoute>
     ),

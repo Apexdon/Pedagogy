@@ -17,6 +17,22 @@ from app.schemas.organisation import (
     OrganisationResponse,
     OrganisationProfile,
 )
+from app.schemas.guidance import (
+    GenerateGuidanceRequest,
+    GenerateGuidanceResponse,
+    GuidanceSessionResponse,
+    GuidanceSessionDetailResponse,
+    GuidanceStepResponse,
+    HaloTargetResponse,
+    AdvanceStepRequest,
+    AdvanceStepResponse,
+    SkipStepRequest,
+    GoToStepRequest,
+    UpdateScreenRequest,
+    SessionStateResponse,
+    SessionListResponse,
+    GuidanceHealthResponse,
+)
 
 __all__ = [
     "UserRegister",
@@ -28,4 +44,19 @@ __all__ = [
     "OrganisationOnboard",
     "OrganisationResponse",
     "OrganisationProfile",
+    # Guidance
+    "GenerateGuidanceRequest",
+    "GenerateGuidanceResponse",
+    "GuidanceSessionResponse",
+    "GuidanceSessionDetailResponse",
+    "GuidanceStepResponse",
+    "HaloTargetResponse",
+    "AdvanceStepRequest",
+    "AdvanceStepResponse",
+    "SkipStepRequest",
+    "GoToStepRequest",
+    "UpdateScreenRequest",
+    "SessionStateResponse",
+    "SessionListResponse",
+    "GuidanceHealthResponse",
 ]

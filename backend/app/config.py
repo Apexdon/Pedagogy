@@ -92,6 +92,33 @@ class Settings(BaseSettings):
     CV_DEFAULT_RESIZE_WIDTH: int = 1920
     CV_DEFAULT_RESIZE_HEIGHT: int = 1080
 
+    # =============================================
+    # AI Guidance Engine Configuration (Phase 6)
+    # =============================================
+
+    # LLM Provider: "ollama" (local/free) or "openai" (cloud/paid)
+    LLM_PROVIDER: str = "ollama"
+
+    # Ollama Settings (Local LLM - primary)
+    # Install: https://ollama.ai then run: ollama pull llama3.2
+    OLLAMA_BASE_URL: str = "http://localhost:11434"
+    OLLAMA_MODEL: str = "llama3.2"
+
+    # OpenAI Settings (cloud fallback)
+    OPENAI_API_KEY: str = ""
+    OPENAI_MODEL: str = "gpt-4.1"
+    OPENAI_MAX_TOKENS: int = 1024
+    OPENAI_TEMPERATURE: float = 0.3
+
+    # Guidance Generation Settings
+    GUIDANCE_MAX_STEPS: int = 20
+    GUIDANCE_MATCH_THRESHOLD: float = 0.6  # Min similarity for element matching
+    GUIDANCE_RAG_TOP_K: int = 5  # Number of RAG results to include in context
+
+    # Session Settings
+    GUIDANCE_SESSION_TIMEOUT_MINUTES: int = 30
+    GUIDANCE_CAPTURES_DIR: str = "./guidance_captures"
+
     class Config:
         env_file = ".env"
         case_sensitive = True
