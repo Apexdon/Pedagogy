@@ -52,7 +52,7 @@ export function HistoryPage() {
 
     setResumingId(session.session_id);
     try {
-      const response = await resumeSession(session.session_id);
+      await resumeSession(session.session_id);
 
       // Update store with session data
       guidanceStore.reset();

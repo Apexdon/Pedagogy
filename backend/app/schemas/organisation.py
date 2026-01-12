@@ -210,3 +210,96 @@ class UpdateProfileResponse(BaseModel):
     success: bool = True
     message: str
     organisation: OrganisationResponse
+
+
+# =============================================
+# Target Application Settings Schemas
+# =============================================
+
+class TargetAppConfig(BaseModel):
+    """Schema for target application configuration."""
+    target_app_name: Optional[str] = Field(
+        None,
+        max_length=255,
+        description="Friendly name of the target application (e.g., 'VS Code', 'Salesforce')"
+    )
+    target_window_pattern: Optional[str] = Field(
+        None,
+        max_length=500,
+        description="Window title pattern to match (supports wildcards: *Visual Studio Code*)"
+    )
+    target_process_name: Optional[str] = Field(
+        None,
+        max_length=255,
+        description="Process executable name (e.g., 'Code.exe', 'chrome.exe')"
+    )
+    target_window_class: Optional[str] = Field(
+        None,
+        max_length=255,
+        description="Windows-specific window class name (advanced)"
+    )
+    additional_config: Optional[Dict[str, Any]] = Field(
+        None,
+        description="Additional app-specific configuration"
+    )
+
+
+class UpdateTargetAppRequest(BaseModel):
+    """Schema for updating target application settings."""
+    target_app_name: Optional[str] = Field(None, max_length=255)
+    target_window_pattern: Optional[str] = Field(None, max_length=500)
+    target_process_name: Optional[str] = Field(None, max_length=255)
+    target_window_class: Optional[str] = Field(None, max_length=255)
+    target_app_config: Optional[Dict[str, Any]] = None
+
+
+class TargetAppResponse(BaseModel):
+    """Schema for target application settings response."""
+    org_id: str
+    target_app_name: Optional[str] = None
+    target_window_pattern: Optional[str] = None
+    target_process_name: Optional[str] = None
+    target_window_class: Optional[str] = None
+    target_app_config: Optional[Dict[str, Any]] = None
+    is_configured: bool = False
+
+    class Config:
+        from_attributes = True
+
+
+class UpdateTargetAppResponse(BaseModel):
+    """Schema for update target app response."""
+    success: bool = True
+    message: str
+    target_app: TargetAppResponse
+
+
+class WindowInfo(BaseModel):
+    """Schema for detected window information."""
+    window_handle: int
+    title: str
+    process_name: str
+    process_id: int
+    is_visible: bool
+    is_minimized: bool
+    rect: Dict[str, int]  # {left, top, right, bottom}
+
+
+class DetectWindowsResponse(BaseModel):
+    """Schema for detected windows response."""
+    windows: List[WindowInfo]
+    total: int
+    matching_window: Optional[WindowInfo] = None  # Window matching org's pattern
+
+
+class ValidatePatternRequest(BaseModel):
+    """Schema for validating a window pattern."""
+    pattern: str = Field(..., max_length=500)
+
+
+class ValidatePatternResponse(BaseModel):
+    """Schema for pattern validation response."""
+    pattern: str
+    is_valid: bool
+    matching_windows: List[WindowInfo] = []
+    error_message: Optional[str] = None

@@ -1,4 +1,4 @@
-import { useCallback, useEffect } from 'react';
+import { useCallback } from 'react';
 import { useGuidanceStore } from '@/stores';
 import type { GenerateGuidanceRequest, GuidanceStep, HaloTarget } from '@/types';
 
@@ -32,9 +32,9 @@ export function useGuidance() {
   // Computed: Has active session
   const hasActiveSession = store.sessionId !== null && store.status !== 'idle';
 
-  // Computed: Can advance
+  // Computed: Can advance (also true for last step to allow completing the session)
   const canAdvance =
-    store.status === 'active' && !store.isAdvancing && store.currentStep < store.totalSteps;
+    store.status === 'active' && !store.isAdvancing && store.currentStep <= store.totalSteps;
 
   // Computed: Can go back
   const canGoBack = store.status === 'active' && !store.isAdvancing && store.currentStep > 1;
@@ -106,9 +106,20 @@ export function useGuidance() {
     overallConfidence: store.overallConfidence,
     error: store.error,
 
+    // Visual guidance state
+    visualGuidanceActive: store.visualGuidanceActive,
+    targetAppConfigured: store.targetAppConfigured,
+    targetWindowFound: store.targetWindowFound,
+    targetWindowTitle: store.targetWindowTitle,
+    detectedElements: store.detectedElements,
+    captureTimeMs: store.captureTimeMs,
+    matchConfidence: store.matchConfidence,
+
     // Loading states
     isGenerating: store.isGenerating,
     isAdvancing: store.isAdvancing,
+    isCapturing: store.isCapturing,
+    isStartingVisual: store.isStartingVisual,
 
     // Computed
     currentStepData,
@@ -122,6 +133,8 @@ export function useGuidance() {
 
     // Actions
     startGuidance,
+    startVisualGuidance: store.startVisualGuidance,
+    captureCurrentStep: store.captureCurrentStep,
     completeStep,
     skipCurrentStep,
     goToPreviousStep,

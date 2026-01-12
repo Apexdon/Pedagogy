@@ -5,7 +5,7 @@ REST API for AI-powered guidance generation and session management.
 """
 
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Body, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 import logging
 
@@ -30,6 +30,11 @@ from app.schemas.guidance import (
     GuidanceHealthResponse,
     LLMHealthResponse,
     BoundingBox,
+    CaptureStepRequest,
+    CaptureStepResponse,
+    DetectedElement,
+    StartGuidanceRequest,
+    StartGuidanceResponse,
 )
 from app.ai_engine import GuidanceGenerator, StepTracker, get_llm_client
 from app.services.knowledge_service import KnowledgeService
@@ -514,3 +519,500 @@ async def guidance_health():
         rag_available=True,  # RAG is always available if DB is up
         cv_available=True,  # CV pipeline is always available
     )
+
+
+# =============================================
+# Step Capture & Halo Integration
+# =============================================
+
+@router.post("/sessions/{session_id}/start", response_model=StartGuidanceResponse)
+async def start_guidance_session(
+    session_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    membership: UserOrganisation = Depends(get_current_org_membership),
+):
+    """
+    Start active guidance for a session.
+
+    This endpoint:
+    1. Checks if target application is configured for the org
+    2. Finds the target window on the user's desktop
+    3. Captures and analyzes the window
+    4. Matches the first step to detected UI elements
+    5. Returns the Halo target for the first step
+    """
+    from sqlalchemy import select
+    from app.models.organisation import Organisation
+    from app.services.window_capture import get_window_capture_service
+    from app.services.cv_service import get_cv_service
+    from app.ai_engine.matcher import ElementMatcher, TargetSpec, UIElement
+    import time
+
+    # Get session
+    tracker = StepTracker(db)
+    session = await tracker.get_session(session_id, current_user.user_id)
+
+    if not session:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Session not found",
+        )
+
+    # Get organisation target app settings
+    result = await db.execute(
+        select(Organisation).where(Organisation.org_id == membership.org_id)
+    )
+    organisation = result.scalar_one_or_none()
+
+    if not organisation:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Organisation not found",
+        )
+
+    target_app_configured = organisation.has_target_app_configured
+
+    if not target_app_configured:
+        return StartGuidanceResponse(
+            success=True,
+            session_id=session_id,
+            status=session.status,
+            current_step=session.current_step,
+            total_steps=session.total_steps,
+            target_app_configured=False,
+            target_window_found=False,
+            target_window_title=None,
+            current_target=None,
+            message="Target application not configured. Please configure in organisation settings.",
+        )
+
+    # Find target window
+    window_service = get_window_capture_service()
+    image_base64, window = window_service.capture_window_by_pattern(
+        pattern=organisation.target_window_pattern,
+        process_name=organisation.target_process_name,
+    )
+
+    if not window:
+        return StartGuidanceResponse(
+            success=True,
+            session_id=session_id,
+            status=session.status,
+            current_step=session.current_step,
+            total_steps=session.total_steps,
+            target_app_configured=True,
+            target_window_found=False,
+            target_window_title=None,
+            current_target=None,
+            message=f"Target window not found. Please open {organisation.target_app_name or 'the target application'}.",
+        )
+
+    # Analyze captured screen
+    current_target = None
+    if image_base64:
+        try:
+            cv_service = get_cv_service()
+            start_time = time.time()
+            screen_state = await cv_service.analyze_screen(image_base64)
+            elapsed = (time.time() - start_time) * 1000
+
+            # Get current step
+            current_step_obj = None
+            for step in sorted(session.steps, key=lambda s: s.step_number):
+                if step.status == StepStatus.CURRENT.value:
+                    current_step_obj = step
+                    break
+
+            if current_step_obj and screen_state.elements:
+                # Convert to UIElement format
+                ui_elements = [
+                    UIElement(
+                        element_id=elem.element_id,
+                        type=elem.type,
+                        label=elem.label,
+                        bbox={
+                            "x1": elem.bbox.x1,
+                            "y1": elem.bbox.y1,
+                            "x2": elem.bbox.x2,
+                            "y2": elem.bbox.y2,
+                        },
+                        confidence=elem.confidence,
+                        metadata=elem.metadata,
+                    )
+                    for elem in screen_state.elements
+                ]
+
+                # Match step to elements
+                matcher = ElementMatcher()
+                target_spec = TargetSpec(
+                    element_type=current_step_obj.target_element_type,
+                    label=current_step_obj.target_element_label,
+                    action=current_step_obj.action_type,
+                )
+
+                match_result = matcher.match_element(target_spec, ui_elements)
+
+                if match_result:
+                    current_target = HaloTargetResponse(
+                        target_id=match_result.element.element_id,
+                        bbox=BoundingBox(
+                            x1=match_result.element.bbox["x1"],
+                            y1=match_result.element.bbox["y1"],
+                            x2=match_result.element.bbox["x2"],
+                            y2=match_result.element.bbox["y2"],
+                        ),
+                        element_type=match_result.element.type,
+                        label=match_result.element.label,
+                        step_number=current_step_obj.step_number,
+                        action_type=current_step_obj.action_type,
+                        confidence=match_result.confidence,
+                    )
+
+            logger.info(f"Screen analyzed in {elapsed:.0f}ms, {len(screen_state.elements)} elements found")
+
+        except Exception as e:
+            logger.error(f"Failed to analyze screen: {e}")
+
+    return StartGuidanceResponse(
+        success=True,
+        session_id=session_id,
+        status=session.status,
+        current_step=session.current_step,
+        total_steps=session.total_steps,
+        target_app_configured=True,
+        target_window_found=True,
+        target_window_title=window.title,
+        current_target=current_target,
+        message="Guidance started. Follow the highlighted elements.",
+    )
+
+
+@router.post("/sessions/{session_id}/capture", response_model=CaptureStepResponse)
+async def capture_step(
+    session_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    membership: UserOrganisation = Depends(get_current_org_membership),
+    request: Optional[CaptureStepRequest] = Body(default=None),
+):
+    """
+    Capture and analyze screen for the current step.
+
+    This endpoint:
+    1. Uses provided screenshot from frontend (Tauri) OR captures the target application window
+    2. Runs CV analysis (UI detection + OCR)
+    3. Matches the current step instruction to detected elements
+    4. Returns the Halo target coordinates
+    """
+    from sqlalchemy import select
+    from app.models.organisation import Organisation
+    from app.services.window_capture import get_window_capture_service
+    from app.services.cv_service import get_cv_service
+    from app.ai_engine.matcher import ElementMatcher, TargetSpec, UIElement
+    import time
+
+    start_time = time.time()
+
+    # Get session
+    tracker = StepTracker(db)
+    session = await tracker.get_session(session_id, current_user.user_id)
+
+    if not session:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Session not found",
+        )
+
+    # Get current step
+    current_step_obj = None
+    for step in sorted(session.steps, key=lambda s: s.step_number):
+        if step.status == StepStatus.CURRENT.value:
+            current_step_obj = step
+            break
+
+    if not current_step_obj:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No current step found in session",
+        )
+
+    # Get organisation target app settings
+    result = await db.execute(
+        select(Organisation).where(Organisation.org_id == membership.org_id)
+    )
+    organisation = result.scalar_one_or_none()
+
+    if not organisation or not organisation.has_target_app_configured:
+        return CaptureStepResponse(
+            success=False,
+            session_id=session_id,
+            step_number=current_step_obj.step_number,
+            instruction=current_step_obj.instruction,
+            target_found=False,
+            target=None,
+            all_elements=[],
+            capture_time_ms=0,
+            match_confidence=0,
+            message="Target application not configured for this organisation.",
+            window_title=None,
+        )
+
+    # Check if frontend provided a screenshot (Tauri capture)
+    image_base64 = None
+    window_title = None
+
+    if request and request.image_base64:
+        # Use image from frontend (Tauri captured it)
+        logger.info("Using screenshot provided by frontend (Tauri capture)")
+        image_base64 = request.image_base64
+        window_title = "Captured by frontend"  # Frontend doesn't provide window title with screenshot
+    else:
+        # Fall back to backend window capture (legacy approach)
+        logger.info("No frontend screenshot provided, attempting backend window capture")
+        window_service = get_window_capture_service()
+
+        image_base64, window = window_service.capture_window_by_pattern(
+            pattern=organisation.target_window_pattern,
+            process_name=organisation.target_process_name,
+        )
+
+        if window:
+            window_title = window.title
+        else:
+            return CaptureStepResponse(
+                success=False,
+                session_id=session_id,
+                step_number=current_step_obj.step_number,
+                instruction=current_step_obj.instruction,
+                target_found=False,
+                target=None,
+                all_elements=[],
+                capture_time_ms=(time.time() - start_time) * 1000,
+                match_confidence=0,
+                message=f"Target window not found. Please open {organisation.target_app_name or 'the target application'}.",
+                window_title=None,
+            )
+
+    if not image_base64:
+        return CaptureStepResponse(
+            success=False,
+            session_id=session_id,
+            step_number=current_step_obj.step_number,
+            instruction=current_step_obj.instruction,
+            target_found=False,
+            target=None,
+            all_elements=[],
+            capture_time_ms=(time.time() - start_time) * 1000,
+            match_confidence=0,
+            message="Failed to capture window screenshot.",
+            window_title=window_title,
+        )
+
+    # Analyze screen
+    try:
+        cv_service = get_cv_service()
+        screen_state = await cv_service.analyze_screen(image_base64)
+    except Exception as e:
+        logger.error(f"CV analysis failed: {e}")
+        return CaptureStepResponse(
+            success=False,
+            session_id=session_id,
+            step_number=current_step_obj.step_number,
+            instruction=current_step_obj.instruction,
+            target_found=False,
+            target=None,
+            all_elements=[],
+            capture_time_ms=(time.time() - start_time) * 1000,
+            match_confidence=0,
+            message=f"Screen analysis failed: {str(e)}",
+            window_title=window_title,
+        )
+
+    # Helper function to enrich element labels using nearby OCR text regions
+    def enrich_element_labels_from_ocr(elements, text_regions, max_distance=50):
+        """
+        For elements without labels, find nearby OCR text and use it as the label.
+        This is a fallback when icon captioning fails.
+        """
+        enriched_count = 0
+        for elem in elements:
+            if elem.label:  # Skip elements that already have labels
+                continue
+
+            elem_bbox = elem.bbox
+            elem_center_x = (elem_bbox.x1 + elem_bbox.x2) / 2
+            elem_center_y = (elem_bbox.y1 + elem_bbox.y2) / 2
+
+            # Find OCR text regions that overlap with or are near this element
+            best_text = None
+            best_distance = float('inf')
+
+            for region in text_regions:
+                region_bbox = region.bbox
+                region_center_x = (region_bbox.x1 + region_bbox.x2) / 2
+                region_center_y = (region_bbox.y1 + region_bbox.y2) / 2
+
+                # Check if OCR region overlaps with element
+                overlaps = (
+                    elem_bbox.x1 <= region_bbox.x2 and elem_bbox.x2 >= region_bbox.x1 and
+                    elem_bbox.y1 <= region_bbox.y2 and elem_bbox.y2 >= region_bbox.y1
+                )
+
+                if overlaps:
+                    # If text overlaps the element, use it immediately
+                    elem.label = region.text
+                    enriched_count += 1
+                    break
+                else:
+                    # Calculate distance from element center to text center
+                    distance = ((elem_center_x - region_center_x) ** 2 + (elem_center_y - region_center_y) ** 2) ** 0.5
+                    if distance < max_distance and distance < best_distance:
+                        best_distance = distance
+                        best_text = region.text
+
+            # Use the nearest text if no overlap found and within max_distance
+            if not elem.label and best_text:
+                elem.label = best_text
+                enriched_count += 1
+
+        return enriched_count
+
+    # Enrich element labels from OCR text if many elements lack labels
+    elements_without_labels = sum(1 for elem in screen_state.elements if not elem.label)
+    if elements_without_labels > len(screen_state.elements) * 0.5:  # More than 50% lack labels
+        enriched = enrich_element_labels_from_ocr(screen_state.elements, screen_state.text_regions)
+        logger.info(f"[CAPTURE_STEP] Enriched {enriched} element labels from OCR text regions")
+
+    # Convert elements to response format
+    all_elements = [
+        DetectedElement(
+            element_id=elem.element_id,
+            element_type=elem.type,
+            label=elem.label,
+            bbox=BoundingBox(
+                x1=elem.bbox.x1,
+                y1=elem.bbox.y1,
+                x2=elem.bbox.x2,
+                y2=elem.bbox.y2,
+            ),
+            confidence=elem.confidence,
+            metadata=elem.metadata,
+        )
+        for elem in screen_state.elements
+    ]
+
+    # Convert to UIElement format for matching
+    ui_elements = [
+        UIElement(
+            element_id=elem.element_id,
+            type=elem.type,
+            label=elem.label,
+            bbox={
+                "x1": elem.bbox.x1,
+                "y1": elem.bbox.y1,
+                "x2": elem.bbox.x2,
+                "y2": elem.bbox.y2,
+            },
+            confidence=elem.confidence,
+            metadata=elem.metadata,
+        )
+        for elem in screen_state.elements
+    ]
+
+    # Match step to elements
+    matcher = ElementMatcher()
+
+    # If target_element_label is None, try to extract it from the instruction
+    target_label = current_step_obj.target_element_label
+    extracted_keywords = []
+
+    logger.info(f"[CAPTURE_STEP] Instruction: {current_step_obj.instruction}, original target_label: {target_label}")
+
+    if not target_label and current_step_obj.instruction:
+        # Extract quoted text or button/link names from instruction
+        import re
+        # Match quoted text like "Sign in" or 'New Issue'
+        quoted = re.findall(r'["\']([^"\']+)["\']', current_step_obj.instruction)
+        # Match "the X button" or "click X" patterns
+        button_match = re.findall(r'(?:click|press|tap|select|the)\s+(?:the\s+)?["\']?(\w+(?:\s+\w+)?)["\']?\s+(?:button|link|tab|option|menu)',
+                                   current_step_obj.instruction, re.IGNORECASE)
+
+        if quoted:
+            target_label = quoted[0]  # Use first quoted text
+            logger.info(f"Extracted target label from quoted text: '{target_label}'")
+        elif button_match:
+            target_label = button_match[0]
+            logger.info(f"Extracted target label from pattern: '{target_label}'")
+        else:
+            # FALLBACK: Use the instruction itself as the label
+            # This allows substring matching (e.g., "Enter your email" matches "Enter your email address")
+            target_label = current_step_obj.instruction
+            logger.info(f"Using instruction as target label for matching: '{target_label}'")
+
+        # Also extract keywords from instruction for fallback matching
+        # Look for common UI element names
+        words = current_step_obj.instruction.lower().split()
+        ui_keywords = ['sign', 'login', 'submit', 'create', 'new', 'search', 'menu', 'settings',
+                       'profile', 'save', 'cancel', 'delete', 'edit', 'add', 'remove', 'open', 'close',
+                       'email', 'username', 'password', 'name', 'enter', 'type', 'fill']
+        extracted_keywords = [w for w in words if w in ui_keywords]
+
+    logger.info(f"[CAPTURE_STEP] After extraction - target_label: {target_label}, keywords: {extracted_keywords}")
+
+    target_spec = TargetSpec(
+        element_type=current_step_obj.target_element_type,
+        label=target_label,
+        keywords=extracted_keywords if extracted_keywords else None,
+        action=current_step_obj.action_type,
+    )
+
+    logger.info(f"Step {current_step_obj.step_number} target spec: type={target_spec.element_type}, label={target_spec.label}, keywords={target_spec.keywords}, action={target_spec.action}")
+    logger.info(f"Detected {len(ui_elements)} UI elements. Sample labels: {[e.label for e in ui_elements[:10] if e.label]}")
+
+    match_result = matcher.match_element(target_spec, ui_elements)
+    capture_time = (time.time() - start_time) * 1000
+
+    if match_result:
+        target = HaloTargetResponse(
+            target_id=match_result.element.element_id,
+            bbox=BoundingBox(
+                x1=match_result.element.bbox["x1"],
+                y1=match_result.element.bbox["y1"],
+                x2=match_result.element.bbox["x2"],
+                y2=match_result.element.bbox["y2"],
+            ),
+            element_type=match_result.element.type,
+            label=match_result.element.label,
+            step_number=current_step_obj.step_number,
+            action_type=current_step_obj.action_type,
+            confidence=match_result.confidence,
+        )
+
+        return CaptureStepResponse(
+            success=True,
+            session_id=session_id,
+            step_number=current_step_obj.step_number,
+            instruction=current_step_obj.instruction,
+            target_found=True,
+            target=target,
+            all_elements=all_elements,
+            capture_time_ms=capture_time,
+            match_confidence=match_result.confidence,
+            message=f"Target element found: {match_result.element.label or match_result.element.type}",
+            window_title=window_title,
+        )
+    else:
+        return CaptureStepResponse(
+            success=True,
+            session_id=session_id,
+            step_number=current_step_obj.step_number,
+            instruction=current_step_obj.instruction,
+            target_found=False,
+            target=None,
+            all_elements=all_elements,
+            capture_time_ms=capture_time,
+            match_confidence=0,
+            message=f"Target element not found. {len(all_elements)} elements detected.",
+            window_title=window_title,
+        )

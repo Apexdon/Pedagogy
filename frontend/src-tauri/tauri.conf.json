@@ -12,6 +12,7 @@
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "Pedagogy - AI Learning Assistant",
         "width": 1200,
         "height": 800,

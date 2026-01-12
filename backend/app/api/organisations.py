@@ -30,6 +30,13 @@ from app.schemas.organisation import (
     TeamMemberSummary,
     KnowledgeBaseSummary,
     RecentActivityItem,
+    UpdateTargetAppRequest,
+    TargetAppResponse,
+    UpdateTargetAppResponse,
+    WindowInfo,
+    DetectWindowsResponse,
+    ValidatePatternRequest,
+    ValidatePatternResponse,
 )
 from app.models.knowledge import KnowledgeBase, Document, DocumentChunk
 from typing import List
@@ -726,4 +733,241 @@ async def join_organisation(
             role=new_membership.role,
             joined_at=new_membership.joined_at,
         )
+    )
+
+
+# =============================================
+# Target Application Settings Endpoints
+# =============================================
+
+@router.get("/target-app", response_model=TargetAppResponse)
+async def get_target_app_settings(
+    current_user: User = Depends(get_current_user),
+    membership: UserOrganisation = Depends(get_current_org_membership),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Get target application settings for the current organisation.
+
+    Returns the configured window pattern and process name used for
+    targeted screen capture during guidance sessions.
+    """
+    result = await db.execute(
+        select(Organisation).where(Organisation.org_id == membership.org_id)
+    )
+    organisation = result.scalar_one_or_none()
+
+    if not organisation:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Organisation not found"
+        )
+
+    return TargetAppResponse(
+        org_id=organisation.org_id,
+        target_app_name=organisation.target_app_name,
+        target_window_pattern=organisation.target_window_pattern,
+        target_process_name=organisation.target_process_name,
+        target_window_class=organisation.target_window_class,
+        target_app_config=organisation.target_app_config,
+        is_configured=organisation.has_target_app_configured,
+    )
+
+
+@router.put("/target-app", response_model=UpdateTargetAppResponse)
+async def update_target_app_settings(
+    request: UpdateTargetAppRequest,
+    current_user: User = Depends(get_current_user),
+    membership: UserOrganisation = Depends(require_role(["org_admin", "manager"])),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Update target application settings for the organisation.
+
+    Only org_admin or manager can update these settings.
+
+    - **target_app_name**: Friendly name (e.g., "VS Code", "Salesforce")
+    - **target_window_pattern**: Window title pattern with wildcards (e.g., "*Visual Studio Code*")
+    - **target_process_name**: Process executable name (e.g., "Code.exe")
+    - **target_window_class**: Windows-specific class name (advanced)
+    - **target_app_config**: Additional configuration as JSON
+    """
+    result = await db.execute(
+        select(Organisation).where(Organisation.org_id == membership.org_id)
+    )
+    organisation = result.scalar_one_or_none()
+
+    if not organisation:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Organisation not found"
+        )
+
+    # Update fields if provided
+    if request.target_app_name is not None:
+        organisation.target_app_name = request.target_app_name
+    if request.target_window_pattern is not None:
+        organisation.target_window_pattern = request.target_window_pattern
+    if request.target_process_name is not None:
+        organisation.target_process_name = request.target_process_name
+    if request.target_window_class is not None:
+        organisation.target_window_class = request.target_window_class
+    if request.target_app_config is not None:
+        organisation.target_app_config = request.target_app_config
+
+    await db.commit()
+    await db.refresh(organisation)
+
+    return UpdateTargetAppResponse(
+        success=True,
+        message="Target application settings updated",
+        target_app=TargetAppResponse(
+            org_id=organisation.org_id,
+            target_app_name=organisation.target_app_name,
+            target_window_pattern=organisation.target_window_pattern,
+            target_process_name=organisation.target_process_name,
+            target_window_class=organisation.target_window_class,
+            target_app_config=organisation.target_app_config,
+            is_configured=organisation.has_target_app_configured,
+        )
+    )
+
+
+@router.delete("/target-app")
+async def clear_target_app_settings(
+    current_user: User = Depends(get_current_user),
+    membership: UserOrganisation = Depends(require_role(["org_admin"])),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Clear target application settings (admin only).
+
+    Removes all target app configuration, disabling targeted window capture.
+    """
+    result = await db.execute(
+        select(Organisation).where(Organisation.org_id == membership.org_id)
+    )
+    organisation = result.scalar_one_or_none()
+
+    if not organisation:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Organisation not found"
+        )
+
+    organisation.target_app_name = None
+    organisation.target_window_pattern = None
+    organisation.target_process_name = None
+    organisation.target_window_class = None
+    organisation.target_app_config = None
+
+    await db.commit()
+
+    return {
+        "success": True,
+        "message": "Target application settings cleared"
+    }
+
+
+@router.get("/windows", response_model=DetectWindowsResponse)
+async def detect_windows(
+    current_user: User = Depends(get_current_user),
+    membership: UserOrganisation = Depends(get_current_org_membership),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Detect all visible windows on the user's system.
+
+    Returns a list of windows that can be used to configure the target app.
+    If the organisation has a window pattern configured, also shows which
+    window matches.
+
+    Note: This requires the desktop client to be running.
+    """
+    from app.services.window_capture import get_window_capture_service
+
+    # Get organisation for pattern matching
+    result = await db.execute(
+        select(Organisation).where(Organisation.org_id == membership.org_id)
+    )
+    organisation = result.scalar_one_or_none()
+
+    window_service = get_window_capture_service()
+    windows = window_service.list_windows(visible_only=True)
+
+    # Convert to response format
+    window_list = [
+        WindowInfo(
+            window_handle=w.window_handle,
+            title=w.title,
+            process_name=w.process_name,
+            process_id=w.process_id,
+            is_visible=w.is_visible,
+            is_minimized=w.is_minimized,
+            rect=w.rect,
+        )
+        for w in windows
+    ]
+
+    # Find matching window if pattern is configured
+    matching_window = None
+    if organisation and organisation.target_window_pattern:
+        match = window_service.find_window_by_pattern(
+            organisation.target_window_pattern,
+            organisation.target_process_name
+        )
+        if match:
+            matching_window = WindowInfo(
+                window_handle=match.window_handle,
+                title=match.title,
+                process_name=match.process_name,
+                process_id=match.process_id,
+                is_visible=match.is_visible,
+                is_minimized=match.is_minimized,
+                rect=match.rect,
+            )
+
+    return DetectWindowsResponse(
+        windows=window_list,
+        total=len(window_list),
+        matching_window=matching_window,
+    )
+
+
+@router.post("/validate-pattern", response_model=ValidatePatternResponse)
+async def validate_window_pattern(
+    request: ValidatePatternRequest,
+    current_user: User = Depends(get_current_user),
+    membership: UserOrganisation = Depends(get_current_org_membership),
+):
+    """
+    Validate a window pattern by checking if any windows match.
+
+    Use this to test patterns before saving them.
+
+    - **pattern**: Window title pattern to validate (supports wildcards)
+    """
+    from app.services.window_capture import get_window_capture_service
+
+    window_service = get_window_capture_service()
+    is_valid, matching, error = window_service.validate_pattern(request.pattern)
+
+    matching_windows = [
+        WindowInfo(
+            window_handle=w.window_handle,
+            title=w.title,
+            process_name=w.process_name,
+            process_id=w.process_id,
+            is_visible=w.is_visible,
+            is_minimized=w.is_minimized,
+            rect=w.rect,
+        )
+        for w in matching
+    ]
+
+    return ValidatePatternResponse(
+        pattern=request.pattern,
+        is_valid=is_valid,
+        matching_windows=matching_windows,
+        error_message=error,
     )

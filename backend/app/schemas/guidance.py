@@ -185,3 +185,57 @@ class GuidanceHealthResponse(BaseModel):
     llm: LLMHealthResponse
     rag_available: bool
     cv_available: bool
+
+
+# =============================================
+# Step Capture Schemas (for per-step CV analysis)
+# =============================================
+
+class CaptureStepRequest(BaseModel):
+    """Request to capture and analyze screen for current step."""
+    image_base64: Optional[str] = Field(None, description="Base64 encoded screenshot from frontend (Tauri)")
+    force_capture: bool = Field(False, description="Force new capture even if recent one exists")
+
+
+class DetectedElement(BaseModel):
+    """Detected UI element from CV pipeline."""
+    element_id: str
+    element_type: str
+    label: Optional[str] = None
+    bbox: BoundingBox
+    confidence: float
+    metadata: Dict[str, Any] = {}
+
+
+class CaptureStepResponse(BaseModel):
+    """Response from step capture with matched target."""
+    success: bool
+    session_id: str
+    step_number: int
+    instruction: str
+    target_found: bool
+    target: Optional[HaloTargetResponse] = None
+    all_elements: List[DetectedElement] = []
+    capture_time_ms: float = 0.0
+    match_confidence: float = 0.0
+    message: str
+    window_title: Optional[str] = None
+
+
+class StartGuidanceRequest(BaseModel):
+    """Request to start active guidance (triggers first capture)."""
+    session_id: str = Field(..., description="Generated guidance session ID")
+
+
+class StartGuidanceResponse(BaseModel):
+    """Response when starting active guidance."""
+    success: bool
+    session_id: str
+    status: str
+    current_step: int
+    total_steps: int
+    target_app_configured: bool
+    target_window_found: bool
+    target_window_title: Optional[str] = None
+    current_target: Optional[HaloTargetResponse] = None
+    message: str

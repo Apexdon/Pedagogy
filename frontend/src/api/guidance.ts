@@ -9,6 +9,13 @@ import type {
   SessionStateResponse,
   AdvanceStepResponse,
   GuidanceHealthResponse,
+  StartGuidanceResponse,
+  CaptureStepResponse,
+  TargetAppSettings,
+  UpdateTargetAppRequest,
+  UpdateTargetAppResponse,
+  DetectWindowsResponse,
+  ValidatePatternResponse,
 } from '@/types';
 
 /**
@@ -137,5 +144,91 @@ export const abandonSession = async (sessionId: string): Promise<{ success: bool
  */
 export const checkGuidanceHealth = async (): Promise<GuidanceHealthResponse> => {
   const response = await apiClient.get<GuidanceHealthResponse>('/guidance/health');
+  return response.data;
+};
+
+// =============================================
+// Active Guidance with Screen Capture (Per-Step CV)
+// =============================================
+
+/**
+ * Start active guidance session with screen capture
+ * This triggers the first screen capture and element detection
+ */
+export const startGuidance = async (sessionId: string): Promise<StartGuidanceResponse> => {
+  const response = await apiClient.post<StartGuidanceResponse>(
+    `/guidance/sessions/${sessionId}/start`
+  );
+  return response.data;
+};
+
+/**
+ * Capture and analyze screen for current step
+ * Captures target window, runs CV pipeline, and matches UI elements
+ *
+ * @param sessionId - The guidance session ID
+ * @param imageBase64 - Optional base64 encoded screenshot from frontend (Tauri capture)
+ */
+export const captureStep = async (
+  sessionId: string,
+  imageBase64?: string
+): Promise<CaptureStepResponse> => {
+  // Always send a body object - FastAPI Body() requires consistent format
+  const payload = {
+    image_base64: imageBase64 || null,
+    force_capture: false,
+  };
+  const response = await apiClient.post<CaptureStepResponse>(
+    `/guidance/sessions/${sessionId}/capture`,
+    payload
+  );
+  return response.data;
+};
+
+// =============================================
+// Target Application Settings
+// =============================================
+
+/**
+ * Get current target application settings for the org
+ */
+export const getTargetAppSettings = async (): Promise<TargetAppSettings> => {
+  const response = await apiClient.get<TargetAppSettings>('/org/target-app');
+  return response.data;
+};
+
+/**
+ * Update target application settings for the org
+ */
+export const updateTargetAppSettings = async (
+  settings: UpdateTargetAppRequest
+): Promise<UpdateTargetAppResponse> => {
+  const response = await apiClient.put<UpdateTargetAppResponse>('/org/target-app', settings);
+  return response.data;
+};
+
+/**
+ * Clear target application settings for the org
+ */
+export const clearTargetAppSettings = async (): Promise<{ success: boolean; message: string }> => {
+  const response = await apiClient.delete<{ success: boolean; message: string }>('/org/target-app');
+  return response.data;
+};
+
+/**
+ * Detect all visible windows on the system
+ */
+export const detectWindows = async (): Promise<DetectWindowsResponse> => {
+  const response = await apiClient.get<DetectWindowsResponse>('/org/windows');
+  return response.data;
+};
+
+/**
+ * Validate a window pattern by checking for matching windows
+ */
+export const validateWindowPattern = async (pattern: string): Promise<ValidatePatternResponse> => {
+  const response = await apiClient.post<ValidatePatternResponse>('/org/validate-pattern', {
+    pattern,
+  });
   return response.data;
 };

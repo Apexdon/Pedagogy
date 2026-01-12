@@ -2,6 +2,8 @@
  * GuidanceSessionPanel Component
  *
  * Right panel showing the current step and navigation controls.
+ * Visual guidance (screen capture, CV, halo overlay) is handled
+ * automatically by the GuidanceCoordinator service.
  */
 
 import { Card, CardBody, Button, Loading } from '@/components/ui';
@@ -24,6 +26,7 @@ export function GuidanceSessionPanel() {
     canAdvance,
     canGoBack,
     isLastStep,
+    // Actions
     completeStep,
     skipCurrentStep,
     goToPreviousStep,

@@ -3,13 +3,24 @@
   "identifier": "default",
   "description": "Pedagogy default permissions",
   "windows": [
-    "main"
+    "main",
+    "halo-overlay",
+    "guidance-panel"
   ],
   "permissions": [
     "core:default",
     "core:event:default",
     "core:event:allow-emit",
     "core:event:allow-listen",
+    "core:window:default",
+    "core:window:allow-create",
+    "core:window:allow-close",
+    "core:window:allow-show",
+    "core:window:allow-hide",
+    "core:window:allow-set-size",
+    "core:window:allow-set-position",
+    "core:window:allow-set-always-on-top",
+    "core:window:allow-set-ignore-cursor-events",
     "shell:allow-open",
     "notification:default"
   ]

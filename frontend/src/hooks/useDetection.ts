@@ -53,7 +53,7 @@ export function useDetection(options: UseDetectionOptions = {}) {
     handleWindowMatch,
   } = useDetectionStore();
 
-  const intervalRef = useRef<NodeJS.Timeout | null>(null);
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Apply options to store on mount
   useEffect(() => {

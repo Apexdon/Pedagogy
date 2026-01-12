@@ -57,12 +57,14 @@ class ElementMatcher:
     """
 
     # Element type compatibility matrix
+    # Note: "interactive_element" is a generic type from OmniParser, compatible with all actions
+    # Note: "icon" is added to all actions since OmniParser often detects UI elements as icons
     TYPE_COMPATIBILITY = {
-        "click": ["button", "link", "icon", "tab", "checkbox", "radio", "menu", "menuitem"],
-        "type": ["input", "textfield", "textarea", "searchbox", "combobox"],
-        "select": ["dropdown", "select", "combobox", "listbox", "menu"],
-        "scroll": ["scrollbar", "list", "table", "container"],
-        "hover": ["button", "link", "icon", "tooltip", "menu"],
+        "click": ["button", "link", "icon", "tab", "checkbox", "radio", "menu", "menuitem", "interactive_element"],
+        "type": ["input", "textfield", "textarea", "searchbox", "combobox", "interactive_element", "icon"],
+        "select": ["dropdown", "select", "combobox", "listbox", "menu", "interactive_element", "icon"],
+        "scroll": ["scrollbar", "list", "table", "container", "interactive_element", "icon"],
+        "hover": ["button", "link", "icon", "tooltip", "menu", "interactive_element"],
     }
 
     # Type aliases for normalization

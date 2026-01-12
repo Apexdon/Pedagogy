@@ -145,3 +145,99 @@ export interface GuidanceHealthResponse {
   rag_available: boolean;
   cv_available: boolean;
 }
+
+// =============================================
+// Step Capture Types (for per-step CV analysis)
+// =============================================
+
+export interface DetectedElement {
+  element_id: string;
+  element_type: string;
+  label: string | null;
+  bbox: BoundingBox;
+  confidence: number;
+  metadata: Record<string, unknown>;
+}
+
+export interface StartGuidanceResponse {
+  success: boolean;
+  session_id: string;
+  status: string;
+  current_step: number;
+  total_steps: number;
+  target_app_configured: boolean;
+  target_window_found: boolean;
+  target_window_title: string | null;
+  current_target: HaloTarget | null;
+  message: string;
+}
+
+export interface CaptureStepResponse {
+  success: boolean;
+  session_id: string;
+  step_number: number;
+  instruction: string;
+  target_found: boolean;
+  target: HaloTarget | null;
+  all_elements: DetectedElement[];
+  capture_time_ms: number;
+  match_confidence: number;
+  message: string;
+  window_title: string | null;
+}
+
+// =============================================
+// Target Application Settings Types
+// =============================================
+
+export interface TargetAppSettings {
+  org_id: string;
+  target_app_name: string | null;
+  target_window_pattern: string | null;
+  target_process_name: string | null;
+  target_window_class: string | null;
+  target_app_config: Record<string, unknown> | null;
+  is_configured: boolean;
+}
+
+export interface UpdateTargetAppRequest {
+  target_app_name?: string;
+  target_window_pattern?: string;
+  target_process_name?: string;
+  target_window_class?: string;
+  target_app_config?: Record<string, unknown>;
+}
+
+export interface UpdateTargetAppResponse {
+  success: boolean;
+  message: string;
+  target_app: TargetAppSettings;
+}
+
+export interface WindowInfo {
+  window_handle: number;
+  title: string;
+  process_name: string;
+  process_id: number;
+  is_visible: boolean;
+  is_minimized: boolean;
+  rect: {
+    left: number;
+    top: number;
+    right: number;
+    bottom: number;
+  };
+}
+
+export interface DetectWindowsResponse {
+  windows: WindowInfo[];
+  total: number;
+  matching_window: WindowInfo | null;
+}
+
+export interface ValidatePatternResponse {
+  pattern: string;
+  is_valid: boolean;
+  matching_windows: WindowInfo[];
+  error_message: string | null;
+}

@@ -1,358 +1,686 @@
-# Pedagogy - High-Level End-to-End Architecture Diagram
+# Pedagogy - Complete System Architecture
 
-## 1. Complete System Architecture
+## 1. High-Level System Overview
 
 ```mermaid
 flowchart TB
-    subgraph USER["👤 USER LAYER"]
+    subgraph User["👤 USER"]
         U[User]
-        Screen[User's Screen<br/>Websites/Apps/PDFs]
+        TargetApp[Target Application<br/>Salesforce/CRM/etc.]
     end
 
-    subgraph TAURI["🖥️ TAURI DESKTOP APP"]
-        subgraph Frontend["Frontend (React + TypeScript)"]
-            ChatUI[Chat Window UI]
-            SearchBar["Ask Pedagogy" Search Bar]
-            Settings[Settings & Onboarding]
-            HaloCanvas[Halo Overlay Canvas]
+    subgraph TauriApp["🖥️ TAURI DESKTOP APP"]
+        subgraph ReactFrontend["Frontend (React + TypeScript)"]
+            subgraph Pages["Pages"]
+                GP[GuidancePage]
+                HP[HistoryPage]
+                PP[ProfilePage]
+            end
+
+            subgraph Components["Components"]
+                GQP[GuidanceQueryPanel]
+                GSP[GuidanceSessionPanel]
+                HaloComp[HaloOverlay Component]
+            end
+
+            subgraph StateLayer["State Management (Zustand)"]
+                GuidanceStore[guidanceStore]
+                DetectionStore[detectionStore]
+                AuthStore[authStore]
+            end
+
+            subgraph Hooks["Hooks"]
+                UseGuidance[useGuidance]
+                UseGuidanceCoord[useGuidanceCoordinator]
+                UseDetection[useDetection]
+            end
+
+            subgraph Services["Frontend Services"]
+                GuidanceCoord[GuidanceCoordinator<br/>Singleton]
+            end
+
+            subgraph APIClients["API Clients (Axios)"]
+                GuidanceAPI[guidance.ts]
+                DetectionAPI[detection.ts]
+                HaloAPI[halo.ts]
+                KnowledgeAPI[knowledge.ts]
+            end
         end
 
-        subgraph RustCore["Rust Core Layer"]
-            ScreenCapture[Screenshot Capture<br/>High DPI]
-            HotkeyListener[Hotkey Listener<br/>Ctrl+Shift+P]
-            FileAccess[Local File Access]
-            APIBridge[Frontend ↔ Backend Bridge]
+        subgraph RustLayer["Rust Core Layer"]
+            subgraph TauriCommands["Tauri Commands"]
+                DetectionCmds[detection_commands.rs]
+                HaloCmds[halo_commands.rs]
+                SidepanelCmds[sidepanel_commands.rs]
+            end
+
+            subgraph RustModules["Rust Modules"]
+                DetectionMod[Detection Module<br/>Window Monitor]
+                OverlayMod[Overlay Module<br/>Halo Renderer]
+                SidepanelMod[Sidepanel Module]
+            end
+
+            OverlayWindow[Overlay Window<br/>Transparent]
+            SidepanelWindow[Sidepanel Window]
         end
     end
 
-    subgraph FASTAPI["🐍 PYTHON FASTAPI BACKEND"]
-        Router[Request Router]
-
-        subgraph Endpoints["API Endpoints"]
-            E1[POST /capture/context]
-            E2[POST /query/rag]
-            E3[POST /infer/guidance]
-            E4[POST /halo/overlay]
+    subgraph Backend["🐍 PYTHON FASTAPI BACKEND"]
+        subgraph APIRoutes["API Routes"]
+            GuidanceRoute[/guidance<br/>Session Management]
+            KnowledgeRoute[/knowledge<br/>RAG & Upload]
+            CaptureRoute[/capture<br/>CV Analysis]
+            OrgRoute[/organisations<br/>Config]
+            AuthRoute[/auth<br/>Authentication]
         end
 
-        SessionMgr[Session Manager]
-    end
-
-    subgraph CV["🔍 COMPUTER VISION PIPELINE"]
-        subgraph Preprocess["Preprocessing"]
-            Resize[Resize to Fixed Resolution]
-            Normalize[Color Normalization]
-            Contrast[Contrast Amplification]
+        subgraph AIEngine["AI Engine"]
+            GuidanceGen[GuidanceGenerator<br/>Orchestrator]
+            AIReasoner[AIReasoner<br/>LLM Integration]
+            ElementMatcher[ElementMatcher<br/>Fuzzy Matching]
+            StepTracker[StepTracker<br/>Session State]
         end
 
-        subgraph Detection["Detection"]
-            YOLO[YOLOv8/v11<br/>UI Element Detection]
-            OCR[EasyOCR<br/>Text Extraction]
+        subgraph LLMClients["LLM Clients"]
+            OpenAIClient[OpenAI Client<br/>GPT-4.1]
+            OllamaClient[Ollama Client<br/>Local LLM]
         end
 
-        ContextEngine[UI Context Engine<br/>Fuse YOLO + OCR]
-    end
-
-    subgraph RAG["📚 RAG KNOWLEDGE SYSTEM"]
-        subgraph KnowledgeStore["Knowledge Store"]
-            JSONKb[JSON Knowledge Base<br/>SOPs, Manuals, Walkthroughs]
-            VectorDB[(ChromaDB / FAISS<br/>Vector Database)]
+        subgraph CVPipeline["CV Pipeline"]
+            CVService[CVService]
+            OmniParser[OmniParser v2<br/>UI Detection]
+            YOLOv11[YOLO v11<br/>Fallback]
+            EasyOCR[EasyOCR<br/>Text Extraction]
         end
 
-        Embedder[SentenceTransformers<br/>Embedding Generator]
-        Retriever[Semantic Retriever<br/>Top-K Matching]
-    end
+        subgraph RAGSystem["RAG System"]
+            KnowledgeService[KnowledgeService]
+            SentenceTransformers[SentenceTransformers<br/>all-MiniLM-L6-v2]
+            ChromaDB[(ChromaDB<br/>Vector Store)]
+        end
 
-    subgraph AI["🧠 AI MATCHING ENGINE"]
-        LLM[LLM<br/>GPT-4.1 or Claude 3.5 Sonnet
-]
-        Matcher[Label Proximity Matcher]
-        GuidanceGen[Guidance Generator]
-    end
-
-    subgraph ORG["🏢 ORGANISATION DATA"]
-        OrgData[(Organisation<br/>Knowledge Base + Vectors + Config)]
+        subgraph DataLayer["Data Layer"]
+            SQLite[(SQLite/PostgreSQL<br/>Sessions, Users, Orgs)]
+            FileStorage[File Storage<br/>Uploads, Screenshots]
+        end
     end
 
     %% User Interactions
-    U -->|Types Query| ChatUI
-    U -->|Views| Screen
-    U -->|Presses Hotkey| HotkeyListener
+    U -->|Query & Actions| GP
+    U -->|Views| TargetApp
+    TargetApp -.->|Captured| DetectionMod
 
-    %% Frontend to Rust
-    ChatUI --> APIBridge
-    SearchBar --> APIBridge
+    %% Frontend Flow
+    GP --> GQP
+    GP --> GSP
+    GSP --> HaloComp
+    GQP --> UseGuidance
+    GSP --> UseGuidanceCoord
+    UseGuidance --> GuidanceStore
+    UseGuidanceCoord --> GuidanceCoord
+    GuidanceCoord --> GuidanceStore
+    GuidanceStore --> GuidanceAPI
 
-    %% Rust Operations
-    ScreenCapture -->|Capture| Screen
-    HotkeyListener --> ScreenCapture
+    %% Tauri IPC
+    GuidanceCoord -->|invoke| DetectionCmds
+    GuidanceCoord -->|invoke| HaloCmds
+    DetectionCmds --> DetectionMod
+    HaloCmds --> OverlayMod
+    OverlayMod --> OverlayWindow
+    OverlayWindow -.->|Overlay on| TargetApp
 
-    %% Rust to Backend
-    APIBridge --> Router
-    ScreenCapture --> E1
+    %% Frontend to Backend HTTP
+    GuidanceAPI -->|HTTP| GuidanceRoute
+    KnowledgeAPI -->|HTTP| KnowledgeRoute
+    DetectionAPI -->|HTTP| CaptureRoute
 
-    %% Backend Routing
-    Router --> Endpoints
-    SessionMgr --> ORG
+    %% Backend Internal Flow
+    GuidanceRoute --> GuidanceGen
+    GuidanceGen --> AIReasoner
+    GuidanceGen --> ElementMatcher
+    GuidanceGen --> StepTracker
+    AIReasoner --> OpenAIClient
+    AIReasoner --> OllamaClient
+    StepTracker --> SQLite
 
-    %% CV Pipeline
-    E1 --> Preprocess
-    Preprocess --> YOLO
-    Preprocess --> OCR
-    YOLO --> ContextEngine
-    OCR --> ContextEngine
+    GuidanceRoute --> CVService
+    CVService --> OmniParser
+    CVService --> YOLOv11
+    CVService --> EasyOCR
 
-    %% RAG Pipeline
-    E2 --> Embedder
-    Embedder --> VectorDB
-    VectorDB --> Retriever
-    JSONKb --> Retriever
-
-    %% AI Processing
-    ContextEngine --> LLM
-    Retriever --> LLM
-    LLM --> Matcher
-    Matcher --> GuidanceGen
-
-    %% Output
-    GuidanceGen --> E4
-    E4 --> APIBridge
-    APIBridge --> HaloCanvas
-    HaloCanvas -->|Overlay| Screen
+    KnowledgeRoute --> KnowledgeService
+    KnowledgeService --> SentenceTransformers
+    KnowledgeService --> ChromaDB
 ```
 
-## 2. End-to-End User Flow
+## 2. Complete Data Flow Sequence
 
 ```mermaid
 sequenceDiagram
     autonumber
     participant U as 👤 User
     participant UI as 🖥️ React UI
-    participant Rust as ⚙️ Rust Core
+    participant Store as 📦 Zustand Store
+    participant Coord as 🎯 GuidanceCoordinator
+    participant Tauri as ⚙️ Tauri (Rust)
     participant API as 🐍 FastAPI
     participant RAG as 📚 RAG System
     participant CV as 🔍 CV Pipeline
-    participant AI as 🧠 AI Engine
-    participant Halo as ✨ Halo Overlay
+    participant LLM as 🧠 LLM (GPT-4.1)
+    participant DB as 💾 Database
 
-    Note over U,Halo: PHASE 1: User Login
-    U->>UI: Opens Pedagogy Desktop App
-    U->>UI: Logs in with credentials
-    UI->>API: POST /auth/login
-    API-->>UI: Authentication successful
+    Note over U,DB: PHASE 1: Guidance Generation
+    U->>UI: Types "How do I submit an invoice?"
+    UI->>Store: generate(query)
+    Store->>API: POST /guidance/generate
 
-    Note over U,Halo: PHASE 2: Query Submission
-    U->>UI: Types question: "How do I submit an invoice?"
-    UI->>Rust: Send query via Tauri Command
-    Rust->>API: POST /query/rag
+    API->>RAG: Query knowledge base
+    RAG->>RAG: Embed query (SentenceTransformers)
+    RAG->>RAG: Vector search ChromaDB
+    RAG-->>API: Relevant documentation chunks
 
-    Note over U,Halo: PHASE 3: Knowledge Retrieval
-    API->>RAG: Search organisation's knowledge base
-    RAG->>RAG: Embed user query
-    RAG->>RAG: Vector search in org's embeddings
-    RAG->>RAG: Semantic filter top-K matches
-    RAG-->>API: Relevant instruction steps
-    API-->>UI: Ready to capture screen
+    API->>LLM: Generate steps (query + RAG context)
+    Note right of LLM: Structured prompt with<br/>JSON output format
+    LLM-->>API: Steps array with targets
 
-    Note over U,Halo: PHASE 4: Screen Capture & Analysis
-    U->>UI: Navigates to relevant screen
-    U->>Rust: Presses hotkey (Ctrl+Shift+P) or clicks Capture
-    Rust->>Rust: Capture full-res screenshot
-    Rust->>API: POST /capture/context (screenshot + query)
-    API->>CV: Process screenshot
-    CV->>CV: Preprocess (resize, normalize, contrast)
+    API->>DB: Create GuidanceSession
+    API->>DB: Create GuidanceSteps
+    API-->>Store: {session_id, steps[], status}
+    Store-->>UI: Display guidance steps
+
+    Note over U,DB: PHASE 2: Start Visual Guidance
+    U->>UI: Clicks "Start Visual Guidance"
+    UI->>Coord: initialize(session, steps)
+    Coord->>API: GET /organisations/{id}
+    API-->>Coord: {target_window_pattern, target_app_name}
+
+    Coord->>Tauri: start_window_monitoring(pattern)
+    Tauri->>Tauri: Poll for matching window
+
+    Note over U,DB: PHASE 3: Window Detection & Capture
+    Tauri-->>Coord: window-match event (window found!)
+    Coord->>Tauri: capture_screen()
+    Tauri->>Tauri: High DPI screenshot
+    Tauri-->>Coord: Base64 PNG
+
+    Coord->>API: POST /guidance/sessions/{id}/capture
+    Note right of API: Optional: Tauri screenshot<br/>or backend window capture
+
+    Note over U,DB: PHASE 4: CV Analysis
+    API->>CV: analyze_screen(image)
+
     par Parallel Processing
-        CV->>CV: YOLO detects UI elements
-        CV->>CV: PaddleOCR extracts text
+        CV->>CV: OmniParser detects UI elements
+        CV->>CV: EasyOCR extracts text
     end
-    CV->>CV: Fuse into screen-state JSON
-    CV-->>API: UI Context ready
 
-    Note over U,Halo: PHASE 5: AI Reasoning
-    API->>AI: Merge CV context + RAG results + query
-    AI->>AI: Match screen elements to instructions
-    AI->>AI: Determine next action
-    AI->>AI: Generate halo targets with bboxes
-    AI-->>API: Guidance response
+    CV->>CV: Fuse labels (associate text with elements)
+    CV-->>API: DetectedElements[] + TextRegions[]
 
-    Note over U,Halo: PHASE 6: Halo Rendering
-    API->>Rust: POST /halo/overlay (halo_targets)
-    Rust->>UI: Pass halo data
-    UI->>Halo: Draw glowing borders
-    UI->>Halo: Show tooltips
-    Halo-->>U: Visual guidance on screen!
+    Note over U,DB: PHASE 5: Element Matching
+    API->>API: ElementMatcher.match()
+    Note right of API: Label similarity (fuzzy)<br/>Type compatibility<br/>Keyword presence
+
+    API-->>Coord: HaloTarget {bbox, element, confidence}
+
+    Note over U,DB: PHASE 6: Halo Display
+    Coord->>Tauri: show_halo(target)
+    Tauri->>Tauri: Create/update overlay window
+    Tauri-->>U: Visual highlight on target element!
+
+    Note over U,DB: PHASE 7: Step Completion
+    U->>UI: Clicks "Next Step" (or completes action)
+    UI->>Store: advance()
+    Store->>API: POST /sessions/{id}/advance
+    API->>DB: Mark step COMPLETED, next step CURRENT
+    API-->>Store: Updated session state
+
+    Coord->>Coord: Re-capture for next step
+    Note over Coord,DB: Loop back to Phase 3
 ```
 
-## 3. State Machine Diagram
-
-```mermaid
-stateDiagram-v2
-    [*] --> IDLE: App launches
-
-    IDLE --> QUERYING: User submits query
-
-    QUERYING --> READY: RAG returns relevant steps
-    QUERYING --> IDLE: No results found
-
-    READY --> CAPTURING: User triggers capture
-    READY --> QUERYING: User modifies query
-    READY --> IDLE: User cancels
-
-    CAPTURING --> GUIDING: Analysis complete
-    CAPTURING --> READY: CV/OCR failed (retry)
-
-    GUIDING --> GUIDING: User completes step (next step)
-    GUIDING --> CAPTURING: User recaptures screen
-    GUIDING --> QUERYING: User asks new question
-    GUIDING --> IDLE: Task complete / Cancel
-
-    note right of IDLE
-        User hasn't asked anything
-    end note
-
-    note right of READY
-        Waiting for user to navigate
-        and trigger screen capture
-    end note
-
-    note right of GUIDING
-        Halos displayed
-        Step-by-step tracking
-    end note
-```
-
-## 4. Component Interaction Diagram
+## 3. Component Architecture Layers
 
 ```mermaid
 flowchart LR
-    subgraph Desktop["Desktop Environment"]
-        App1[Browser]
-        App2[Spreadsheet]
-        App3[PDF Viewer]
+    subgraph Presentation["PRESENTATION LAYER"]
+        direction TB
+        Pages[Pages<br/>GuidancePage, HistoryPage]
+        Components[Components<br/>Panels, Overlays, UI]
     end
 
-    subgraph Pedagogy["Pedagogy App"]
-        subgraph Layer1["Presentation Layer"]
-            React[React UI]
-            Canvas[Halo Canvas]
-        end
-
-        subgraph Layer2["Core Layer"]
-            Rust[Rust Engine]
-        end
-
-        subgraph Layer3["Backend Layer"]
-            FastAPI[FastAPI Server]
-        end
-
-        subgraph Layer4["Intelligence Layer"]
-            CV[CV Pipeline]
-            RAG[RAG System]
-            AI[AI Engine]
-        end
-
-        subgraph Layer5["Data Layer"]
-            OrgConfig[(Org Config)]
-            Vectors[(Vector DB)]
-            KB[(Knowledge Base)]
-        end
+    subgraph State["STATE LAYER"]
+        direction TB
+        Zustand[Zustand Stores<br/>guidance, detection, auth]
+        Hooks[React Hooks<br/>useGuidance, useGuidanceCoordinator]
     end
 
-    Desktop <-->|Screen Capture| Rust
-    Canvas -->|Overlay| Desktop
+    subgraph Orchestration["ORCHESTRATION LAYER"]
+        direction TB
+        Coordinator[GuidanceCoordinator<br/>Session lifecycle, Capture loop]
+        APIClient[API Clients<br/>Axios HTTP calls]
+    end
 
-    React <--> Rust
-    Rust <--> FastAPI
-    FastAPI <--> CV
-    FastAPI <--> RAG
-    FastAPI <--> AI
+    subgraph Desktop["DESKTOP LAYER (Tauri/Rust)"]
+        direction TB
+        Commands[Tauri Commands<br/>IPC Bridge]
+        Detection[Window Detection<br/>Pattern matching, Polling]
+        Capture[Screen Capture<br/>High DPI, Region capture]
+        Overlay[Overlay Window<br/>Transparent, Always-on-top]
+    end
 
-    CV --> AI
-    RAG --> AI
+    subgraph API["API LAYER (FastAPI)"]
+        direction TB
+        Routes[REST Endpoints<br/>/guidance, /capture, /knowledge]
+        Services[Services<br/>CVService, KnowledgeService]
+    end
 
-    RAG <--> Vectors
-    RAG <--> KB
-    FastAPI <--> OrgConfig
+    subgraph AI["AI LAYER"]
+        direction TB
+        Generator[GuidanceGenerator<br/>Orchestration]
+        Reasoner[AIReasoner<br/>LLM prompting]
+        Matcher[ElementMatcher<br/>Fuzzy matching]
+        Tracker[StepTracker<br/>Session state]
+    end
+
+    subgraph ML["ML LAYER"]
+        direction TB
+        LLM[LLM Clients<br/>OpenAI, Ollama]
+        CV[CV Pipeline<br/>OmniParser, YOLO, EasyOCR]
+        RAG[RAG System<br/>Embeddings, ChromaDB]
+    end
+
+    subgraph Data["DATA LAYER"]
+        direction TB
+        SQL[(SQLite/PostgreSQL)]
+        Vector[(ChromaDB)]
+        Files[File Storage]
+    end
+
+    Presentation --> State
+    State --> Orchestration
+    Orchestration --> Desktop
+    Orchestration --> API
+    API --> AI
+    AI --> ML
+    ML --> Data
+    API --> Data
 ```
 
-## 5. Data Flow Diagram
+## 4. Session State Machine
+
+```mermaid
+stateDiagram-v2
+    [*] --> Idle: App Start
+
+    Idle --> Generating: User submits query
+    Generating --> Active: Steps generated successfully
+    Generating --> Error: Generation failed
+
+    Active --> VisualActive: Start visual guidance
+    Active --> Paused: User pauses
+    Active --> Completed: All steps completed
+    Active --> Abandoned: User abandons
+
+    VisualActive --> WindowSearching: Initialize coordinator
+    WindowSearching --> Capturing: Window found
+    WindowSearching --> VisualActive: Window lost
+
+    Capturing --> Matching: CV analysis complete
+    Matching --> HaloDisplayed: Match found (confidence > 0.6)
+    Matching --> Capturing: No match, retry
+
+    HaloDisplayed --> Capturing: User advances step
+    HaloDisplayed --> Paused: User pauses
+    HaloDisplayed --> Completed: Final step completed
+
+    state VisualActive {
+        WindowSearching --> Capturing
+        Capturing --> Matching
+        Matching --> HaloDisplayed
+        HaloDisplayed --> Capturing
+    }
+
+    Paused --> Active: Resume
+    Paused --> VisualActive: Resume with visual
+    Paused --> Abandoned: User abandons
+
+    Error --> Idle: Reset
+    Completed --> Idle: New session
+    Abandoned --> Idle: New session
+```
+
+## 5. Element Matching Algorithm Flow
 
 ```mermaid
 flowchart TD
-    subgraph Input["📥 INPUT"]
-        Query[User Query]
-        Screenshot[Screenshot]
-        OrgContext[Org Context]
+    Input["Input: Current Step + Detected Elements"]
+
+    Input --> ExtractTarget["Extract Step Target Info"]
+    ExtractTarget --> TargetSpec["target_element_type: 'button'<br/>target_element_label: 'Create'<br/>action_type: 'click'<br/>keywords: ['create', 'new']"]
+
+    TargetSpec --> Loop["For Each Detected Element"]
+
+    subgraph Scoring["Scoring Pipeline"]
+        Loop --> NormalizeType["Normalize Element Type<br/>(btn→button, img→icon)"]
+
+        NormalizeType --> LabelScore["1. Label Similarity Score"]
+        LabelScore --> LabelCalc["Exact match: 1.0<br/>Contains: 0.9<br/>Fuzzy (SequenceMatcher): 0.0-1.0"]
+
+        LabelCalc --> TypeScore["2. Type Compatibility Score"]
+        TypeScore --> TypeMatrix["Compatibility Matrix:<br/>click→[button, link, icon] ✓<br/>type→[input, textfield] ✓<br/>select→[dropdown, combobox] ✓"]
+
+        TypeMatrix --> KeywordScore["3. Keyword Bonus"]
+        KeywordScore --> KeywordCalc["Each keyword in label: +0.1"]
+
+        KeywordCalc --> CombineScore["Combine Weighted Scores<br/>total = 0.5×label + 0.3×type + 0.2×keyword"]
     end
 
-    subgraph Processing["⚙️ PROCESSING"]
-        subgraph CVProcess["CV Processing"]
-            IMG[Image] --> PRE[Preprocess]
-            PRE --> DET[YOLO Detection]
-            PRE --> TXT[OCR Extraction]
-            DET --> FUSE[Fusion]
-            TXT --> FUSE
-        end
+    CombineScore --> NextElem{More Elements?}
+    NextElem -->|Yes| Loop
+    NextElem -->|No| SelectBest["Select Highest Score"]
 
-        subgraph RAGProcess["RAG Processing"]
-            QRY[Query] --> EMB[Embed]
-            EMB --> SEARCH[Vector Search]
-            SEARCH --> FILTER[Semantic Filter]
-        end
-
-        subgraph AIProcess["AI Processing"]
-            CTX[Screen Context] --> MERGE[Merge]
-            STEPS[Retrieved Steps] --> MERGE
-            MERGE --> MATCH[Element Matching]
-            MATCH --> GEN[Generate Guidance]
-        end
-    end
-
-    subgraph Output["📤 OUTPUT"]
-        Halos[Halo Targets]
-        Instructions[Step Instructions]
-        Tooltips[UI Tooltips]
-    end
-
-    Query --> QRY
-    Screenshot --> IMG
-    OrgContext --> SEARCH
-
-    FUSE --> CTX
-    FILTER --> STEPS
-
-    GEN --> Halos
-    GEN --> Instructions
-    GEN --> Tooltips
+    SelectBest --> ThresholdCheck{Confidence > 0.6?}
+    ThresholdCheck -->|Yes| ReturnTarget["Return HaloTarget<br/>{bbox, element, confidence, reasons}"]
+    ThresholdCheck -->|No| NoMatch["Return: No match found"]
 ```
 
-## 6. Capture Trigger Flow
+## 6. GuidanceCoordinator Lifecycle
 
 ```mermaid
 flowchart TD
-    Start([User Submits Query]) --> RAG[RAG Retrieves Steps]
-    RAG --> Ready[Ready State]
+    Start([User clicks Start Visual Guidance])
 
-    Ready --> Navigate[User Navigates to Screen]
-    Navigate --> Trigger{Capture Trigger}
+    Start --> Init["initialize(session, steps)"]
+    Init --> LoadOrg["Load org target app settings"]
+    LoadOrg --> CreateOverlay["Create overlay window (Tauri)"]
+    CreateOverlay --> StartMonitor["Start window monitoring"]
 
-    Trigger -->|Hotkey| Capture[Capture Screenshot]
-    Trigger -->|UI Button| Capture
-    Trigger -->|Auto-capture| Capture
+    StartMonitor --> WaitWindow{Window Match?}
+    WaitWindow -->|No, polling...| WaitWindow
+    WaitWindow -->|Yes| EmitFound["Emit: target_window_found"]
 
-    Capture --> Process[CV Pipeline Processes]
-    Process --> AI[AI Generates Guidance]
-    AI --> Halo([Display Halos])
+    EmitFound --> CaptureScreen["Capture screenshot"]
+    CaptureScreen --> SendToBackend["POST /sessions/{id}/capture"]
+    SendToBackend --> CVAnalysis["Backend: CV analysis"]
+    CVAnalysis --> Matching["Backend: Element matching"]
 
-    Halo --> Next{User Action}
-    Next -->|Next Step| Capture
-    Next -->|New Query| Start
-    Next -->|Done| End([Session Complete])
+    Matching --> MatchResult{Match Found?}
+    MatchResult -->|Yes| ShowHalo["show_halo(target)"]
+    MatchResult -->|No, confidence < 0.6| RetryCapture["Retry after delay"]
+    RetryCapture --> CaptureScreen
+
+    ShowHalo --> WaitAction{User Action?}
+    WaitAction -->|Advance| AdvanceStep["POST /sessions/{id}/advance"]
+    WaitAction -->|Skip| SkipStep["POST /sessions/{id}/skip"]
+    WaitAction -->|Pause| PauseSession["pause()"]
+
+    AdvanceStep --> MoreSteps{More Steps?}
+    SkipStep --> MoreSteps
+    MoreSteps -->|Yes| CaptureScreen
+    MoreSteps -->|No| Complete["Session COMPLETED"]
+
+    PauseSession --> WaitResume{Resume?}
+    WaitResume -->|Yes| CaptureScreen
+    WaitResume -->|No, Abandon| Cleanup
+
+    Complete --> Cleanup["Stop monitoring, Destroy overlay"]
+    Cleanup --> End([End])
+
+    %% Window Lost Path
+    WaitWindow -->|Window Lost| EmitLost["Emit: target_window_lost"]
+    EmitLost --> WaitWindow
 ```
+
+## 7. API Endpoints Map
+
+```mermaid
+flowchart LR
+    subgraph Auth["/auth"]
+        direction TB
+        A1["POST /login"]
+        A2["POST /register"]
+        A3["POST /refresh"]
+    end
+
+    subgraph Guidance["/guidance"]
+        direction TB
+        G1["POST /generate<br/>Create session + steps"]
+        G2["GET /sessions<br/>List user sessions"]
+        G3["GET /sessions/{id}<br/>Get session details"]
+        G4["GET /sessions/{id}/state<br/>Lightweight state poll"]
+        G5["POST /sessions/{id}/start<br/>Start active guidance"]
+        G6["POST /sessions/{id}/capture<br/>Capture & analyze"]
+        G7["POST /sessions/{id}/advance<br/>Next step"]
+        G8["POST /sessions/{id}/skip<br/>Skip step"]
+        G9["POST /sessions/{id}/goto/{n}<br/>Jump to step"]
+        G10["POST /sessions/{id}/pause"]
+        G11["POST /sessions/{id}/resume"]
+        G12["POST /sessions/{id}/abandon"]
+    end
+
+    subgraph Knowledge["/knowledge"]
+        direction TB
+        K1["GET /knowledge-bases<br/>List KBs"]
+        K2["POST /knowledge-bases<br/>Create KB"]
+        K3["POST /upload-knowledge<br/>Upload docs"]
+        K4["POST /query/rag<br/>Semantic search"]
+    end
+
+    subgraph Capture["/capture"]
+        direction TB
+        C1["POST /analyze<br/>Full CV analysis"]
+        C2["POST /detect-ui<br/>UI detection only"]
+        C3["POST /extract-text<br/>OCR only"]
+    end
+
+    subgraph Orgs["/organisations"]
+        direction TB
+        O1["CRUD operations"]
+        O2["Target app config"]
+    end
+```
+
+## 8. Technology Stack Mind Map
+
+```mermaid
+mindmap
+    root((Pedagogy))
+        Frontend
+            React 18
+            TypeScript
+            Zustand
+                guidanceStore
+                detectionStore
+                authStore
+            TanStack Query
+            Axios
+            Vite
+        Desktop
+            Tauri 2.x
+            Rust
+            Window APIs
+                Monitoring
+                Capture
+            Overlay Rendering
+            Sidepanel
+        Backend
+            Python 3.10+
+            FastAPI
+            SQLAlchemy Async
+            Pydantic v2
+            Uvicorn
+        AI/ML
+            LLM
+                OpenAI GPT-4.1
+                Ollama (Local)
+            Computer Vision
+                OmniParser v2
+                YOLO v11
+                EasyOCR
+            RAG
+                SentenceTransformers
+                all-MiniLM-L6-v2
+        Storage
+            SQLite (Dev)
+            PostgreSQL (Prod)
+            ChromaDB (Vectors)
+            File System (Uploads)
+```
+
+## 9. Database Schema Relationships
+
+```mermaid
+erDiagram
+    User ||--o{ GuidanceSession : creates
+    User }o--|| Organisation : belongs_to
+    Organisation ||--o{ KnowledgeBase : has
+    Organisation ||--o{ GuidanceSession : owns
+
+    GuidanceSession ||--o{ GuidanceStep : contains
+    GuidanceSession ||--o{ GuidanceCapture : has
+
+    GuidanceSession {
+        uuid session_id PK
+        uuid user_id FK
+        uuid org_id FK
+        string query
+        enum status
+        int current_step
+        int total_steps
+        uuid kb_id FK
+        json rag_context
+        datetime created_at
+    }
+
+    GuidanceStep {
+        uuid step_id PK
+        uuid session_id FK
+        int step_number
+        string instruction
+        string target_element_type
+        string target_element_label
+        json target_bbox
+        enum action_type
+        string action_value
+        float match_confidence
+        enum status
+    }
+
+    GuidanceCapture {
+        uuid capture_id PK
+        uuid session_id FK
+        uuid step_id FK
+        enum capture_type
+        string screenshot_path
+        json screen_state
+        int element_count
+        int processing_time_ms
+    }
+
+    Organisation {
+        uuid org_id PK
+        string org_name
+        string target_app_name
+        string target_window_pattern
+        string target_process_name
+    }
+
+    KnowledgeBase {
+        uuid kb_id PK
+        uuid org_id FK
+        string name
+        string description
+        int document_count
+        int chunk_count
+    }
+```
+
+## 10. Complete User Journey Flow
+
+```mermaid
+flowchart TD
+    Start([User Opens Pedagogy App])
+
+    Start --> Login[Login / Authentication]
+    Login --> Dashboard[View Dashboard]
+    Dashboard --> AskQuery["Enter Query:<br/>'How do I submit an invoice?'"]
+
+    AskQuery --> Generate["Backend: Generate Guidance"]
+
+    subgraph Generation["Guidance Generation"]
+        Generate --> RAGSearch[RAG: Search knowledge base]
+        RAGSearch --> LLMCall[LLM: Generate structured steps]
+        LLMCall --> SaveSession[Save session to database]
+    end
+
+    SaveSession --> DisplaySteps[Display steps in UI]
+
+    DisplaySteps --> StartVisual{Start Visual Guidance?}
+    StartVisual -->|No| ManualMode[Manual step-by-step navigation]
+    StartVisual -->|Yes| InitCoord[Initialize GuidanceCoordinator]
+
+    InitCoord --> LoadTargetApp[Load org's target app settings]
+    LoadTargetApp --> StartMonitor[Start window monitoring]
+
+    StartMonitor --> WindowLoop{Target Window Found?}
+    WindowLoop -->|No| WindowLoop
+    WindowLoop -->|Yes| CaptureScreen[Capture screenshot]
+
+    CaptureScreen --> CVAnalyze["CV Pipeline:<br/>OmniParser + EasyOCR"]
+    CVAnalyze --> MatchElement[Match step target to UI element]
+
+    MatchElement --> ConfidenceCheck{Confidence > 0.6?}
+    ConfidenceCheck -->|No| RetryCapture[Retry after 2 seconds]
+    RetryCapture --> CaptureScreen
+    ConfidenceCheck -->|Yes| ShowHalo[Display Halo highlight]
+
+    ShowHalo --> UserAction{User completes action}
+    UserAction -->|Advance| NextStep[Move to next step]
+    UserAction -->|Skip| SkipStep[Skip current step]
+    UserAction -->|Pause| PauseSession[Pause session]
+
+    NextStep --> MoreSteps{More steps?}
+    SkipStep --> MoreSteps
+    MoreSteps -->|Yes| CaptureScreen
+    MoreSteps -->|No| Complete[Session completed!]
+
+    PauseSession --> Resume{Resume?}
+    Resume -->|Yes| CaptureScreen
+    Resume -->|No| Abandon[Abandon session]
+
+    ManualMode --> ManualNext[User clicks through steps]
+    ManualNext --> ManualDone{All done?}
+    ManualDone -->|No| ManualNext
+    ManualDone -->|Yes| Complete
+
+    Complete --> History[Save to session history]
+    Abandon --> History
+    History --> End([End])
+```
+
+---
 
 ## How to View These Diagrams
 
 1. **VS Code**: Install "Markdown Preview Mermaid Support" extension
-2. **GitHub**: Paste this file - GitHub renders Mermaid natively
+2. **GitHub**: GitHub renders Mermaid natively in markdown files
 3. **Online**: Use [Mermaid Live Editor](https://mermaid.live/)
-4. **Export**: Use Mermaid CLI to export as PNG/SVG
+4. **Export**: Use Mermaid CLI (`mmdc`) to export as PNG/SVG
+
+---
+
+## Key Files Reference
+
+| Layer | Key Files |
+|-------|-----------|
+| **Frontend Pages** | `src/pages/dashboard/GuidancePage.tsx` |
+| **Frontend Components** | `src/components/guidance/GuidanceSessionPanel.tsx`, `GuidanceQueryPanel.tsx` |
+| **State Management** | `src/stores/guidanceStore.ts`, `detectionStore.ts` |
+| **Coordinator** | `src/services/GuidanceCoordinator.ts` |
+| **API Clients** | `src/api/guidance.ts`, `detection.ts`, `halo.ts` |
+| **Tauri Commands** | `src-tauri/src/commands/detection_commands.rs`, `halo_commands.rs` |
+| **Backend Routes** | `backend/app/api/guidance.py`, `knowledge.py`, `cv_analysis.py` |
+| **AI Engine** | `backend/app/ai_engine/guidance_generator.py`, `matcher.py`, `reasoner.py` |
+| **Services** | `backend/app/services/cv_service.py`, `knowledge_service.py` |
+| **Models** | `backend/app/models/guidance.py`, `organisation.py` |

@@ -10,7 +10,6 @@ import type {
   DetectionStatus,
   DetectionSession,
   CaptureResult,
-  ScreenState,
   WindowPattern,
   WindowMatchEvent,
   CaptureResponse,
