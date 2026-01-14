@@ -8,14 +8,37 @@
  * screen capture, and halo overlay display.
  */
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useCallback } from 'react';
 import { useAuthStore, useGuidanceStore } from '@/stores';
 import { GuidanceQueryPanel, GuidanceSessionPanel } from '@/components/guidance';
 import { useGuidanceCoordinator } from '@/hooks';
 
 export function GuidancePage() {
   const { selectedOrg } = useAuthStore();
-  const { session, steps, hasActiveSession, currentStep } = useGuidanceStore();
+  const { session, steps, hasActiveSession, currentStep, advance, skip, goTo, abandon } = useGuidanceStore();
+
+  // Callbacks for panel navigation (wrapped in useCallback for stability)
+  const handlePanelNext = useCallback(async () => {
+    console.log('[GuidancePage] Panel next clicked, calling advance()');
+    await advance();
+  }, [advance]);
+
+  const handlePanelPrev = useCallback(async () => {
+    console.log('[GuidancePage] Panel prev clicked, going to step', currentStep - 1);
+    if (currentStep > 1) {
+      await goTo(currentStep - 1);
+    }
+  }, [currentStep, goTo]);
+
+  const handlePanelSkip = useCallback(async () => {
+    console.log('[GuidancePage] Panel skip clicked, calling skip()');
+    await skip();
+  }, [skip]);
+
+  const handlePanelEndSession = useCallback(async () => {
+    console.log('[GuidancePage] Panel end session clicked, calling abandon()');
+    await abandon();
+  }, [abandon]);
 
   // Track previous step for detecting changes
   const prevStepRef = useRef<number | null>(null);
@@ -53,6 +76,11 @@ export function GuidancePage() {
     onError: (error) => {
       console.error('Coordinator error:', error);
     },
+    // Panel navigation callbacks - wired to store actions
+    onPanelNextClicked: handlePanelNext,
+    onPanelPrevClicked: handlePanelPrev,
+    onPanelSkipClicked: handlePanelSkip,
+    onPanelEndSession: handlePanelEndSession,
   });
 
   // Initialize coordinator when session becomes active

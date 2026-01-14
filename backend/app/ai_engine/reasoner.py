@@ -103,7 +103,8 @@ class AIReasoner:
     async def _ensure_client(self) -> LLMClient:
         """Lazily initialize LLM client."""
         if self._llm_client is None:
-            self._llm_client = await get_llm_client()
+            # Skip health check for faster initialization (client validates on first use)
+            self._llm_client = await get_llm_client(skip_health_check=True)
             self._initialized = True
         return self._llm_client
 

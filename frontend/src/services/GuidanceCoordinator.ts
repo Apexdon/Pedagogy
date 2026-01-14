@@ -16,6 +16,7 @@ import {
   stopWindowMonitoring,
   isWindowMonitoringActive,
   captureScreen,
+  captureWindow,
 } from '../api/detection';
 import type { WindowMatchEvent } from '../types/detection';
 import {
@@ -105,9 +106,20 @@ class GuidanceCoordinator {
   private config: CoordinatorConfig;
   private eventListeners: Map<CoordinatorEventType, Set<EventCallback>>;
   private windowMonitorUnlisten: UnlistenFn | null = null;
+  private panelReadyUnlisten: UnlistenFn | null = null;
+  private panelNavUnlisteners: UnlistenFn[] = [];
   private captureIntervalId: ReturnType<typeof setInterval> | null = null;
   private isDestroyed = false;
   private allSteps: GuidanceStep[] = [];
+  private pendingStatusUpdate: Promise<unknown> | null = null;
+  private statusUpdateVersion = 0;
+  private isCaptureInProgress = false; // Mutex to prevent concurrent captures
+
+  // Callback for external step advancement (set by useGuidanceCoordinator)
+  public onPanelNextClicked: (() => Promise<void>) | null = null;
+  public onPanelPrevClicked: (() => Promise<void>) | null = null;
+  public onPanelSkipClicked: (() => Promise<void>) | null = null;
+  public onPanelEndSession: (() => Promise<void>) | null = null;
 
   constructor(config?: Partial<CoordinatorConfig>) {
     this.config = {
@@ -190,6 +202,66 @@ class GuidanceCoordinator {
         await createOverlayWindow();
       }
 
+      // Listen for panel ready event to re-sync session state
+      // This handles the race condition where panel might not be ready when events are first sent
+      this.panelReadyUnlisten = await listen('panel:ready', async () => {
+        console.log('[GuidanceCoordinator] Panel ready event received, syncing session state');
+        if (this.state.session) {
+          // Re-send session info
+          await showGuidancePanel(
+            this.state.session.session_id,
+            this.state.session.query,
+            this.state.session.total_steps,
+            this.state.session.application_context || null
+          );
+          // Re-send current step
+          if (this.state.currentStep) {
+            await this.updateSidePanel(this.state.currentStep);
+          }
+          // Re-send status
+          await this.updatePanelStatus();
+        }
+      });
+
+      // Listen for panel navigation events
+      this.panelNavUnlisteners = [];
+
+      // Next button clicked
+      const nextUnlisten = await listen('panel:next_clicked', async () => {
+        console.log('[GuidanceCoordinator] Panel next clicked');
+        if (this.onPanelNextClicked) {
+          await this.onPanelNextClicked();
+        }
+      });
+      this.panelNavUnlisteners.push(nextUnlisten);
+
+      // Previous button clicked
+      const prevUnlisten = await listen('panel:prev_clicked', async () => {
+        console.log('[GuidanceCoordinator] Panel prev clicked');
+        if (this.onPanelPrevClicked) {
+          await this.onPanelPrevClicked();
+        }
+      });
+      this.panelNavUnlisteners.push(prevUnlisten);
+
+      // Skip button clicked
+      const skipUnlisten = await listen('panel:skip_clicked', async () => {
+        console.log('[GuidanceCoordinator] Panel skip clicked');
+        if (this.onPanelSkipClicked) {
+          await this.onPanelSkipClicked();
+        }
+      });
+      this.panelNavUnlisteners.push(skipUnlisten);
+
+      // End session clicked
+      const endUnlisten = await listen('panel:end_session', async () => {
+        console.log('[GuidanceCoordinator] Panel end session clicked');
+        if (this.onPanelEndSession) {
+          await this.onPanelEndSession();
+        }
+      });
+      this.panelNavUnlisteners.push(endUnlisten);
+
       // Show the side panel with session info
       await showGuidancePanel(
         session.session_id,
@@ -203,9 +275,14 @@ class GuidanceCoordinator {
         await setSidePanelTargetPattern(this.state.targetAppSettings.target_window_pattern);
       }
 
-      // Update panel with current step
+      // Update panel with current step (with a small delay to allow panel to mount)
       if (this.state.currentStep) {
-        await this.updateSidePanel(this.state.currentStep);
+        // Small delay to ensure panel is ready
+        setTimeout(async () => {
+          if (this.state.currentStep) {
+            await this.updateSidePanel(this.state.currentStep);
+          }
+        }, 500);
       }
 
       // Start window monitoring if target app is configured
@@ -317,10 +394,36 @@ class GuidanceCoordinator {
 
   /**
    * Update the side panel coordinator status
+   * Uses versioning to ensure only the latest status is sent
    */
   private async updatePanelStatus(): Promise<void> {
+    // Increment version and capture it for this update
+    this.statusUpdateVersion++;
+    const myVersion = this.statusUpdateVersion;
+
+    // Capture current status before any async operations
+    const currentStatus = this.state.status;
+    const isTargetActive = this.state.isTargetWindowActive;
+    const targetPattern = this.state.targetAppSettings?.target_window_pattern || null;
+
+    // Wait for any pending update to complete
+    if (this.pendingStatusUpdate) {
+      await this.pendingStatusUpdate;
+    }
+
+    // Check if a newer update was requested while we waited
+    if (myVersion !== this.statusUpdateVersion) {
+      return; // Skip this update, a newer one is coming
+    }
+
+    // Check if panel exists
     const panelCreated = await isSidePanelCreated();
     if (!panelCreated) return;
+
+    // Check again after async call
+    if (myVersion !== this.statusUpdateVersion) {
+      return;
+    }
 
     const statusMap: Record<CoordinatorStatus, string> = {
       idle: 'idle',
@@ -335,11 +438,15 @@ class GuidanceCoordinator {
       error: 'error',
     };
 
-    await notifyPanelCoordinatorStatus(
-      statusMap[this.state.status],
-      this.state.isTargetWindowActive,
-      this.state.targetAppSettings?.target_window_pattern || null
+    // Create and track this update
+    this.pendingStatusUpdate = notifyPanelCoordinatorStatus(
+      statusMap[currentStatus],
+      isTargetActive,
+      targetPattern
     );
+
+    await this.pendingStatusUpdate;
+    this.pendingStatusUpdate = null;
   }
 
   /**
@@ -356,6 +463,16 @@ class GuidanceCoordinator {
     this.stopCaptureLoop();
     await this.stopWindowMonitoring();
     await hideHalo();
+
+    // Stop listening for panel ready events
+    if (this.panelReadyUnlisten) {
+      this.panelReadyUnlisten();
+      this.panelReadyUnlisten = null;
+    }
+
+    // Stop listening for panel navigation events
+    this.panelNavUnlisteners.forEach(unlisten => unlisten());
+    this.panelNavUnlisteners = [];
 
     // Close the side panel
     await closeGuidancePanel('abandoned');
@@ -374,6 +491,16 @@ class GuidanceCoordinator {
     await this.stop();
     await destroyOverlayWindow();
     this.eventListeners.clear();
+
+    // Ensure panel ready listener is cleaned up
+    if (this.panelReadyUnlisten) {
+      this.panelReadyUnlisten();
+      this.panelReadyUnlisten = null;
+    }
+
+    // Ensure panel navigation listeners are cleaned up
+    this.panelNavUnlisteners.forEach(unlisten => unlisten());
+    this.panelNavUnlisteners = [];
   }
 
   // =============================================
@@ -499,6 +626,16 @@ class GuidanceCoordinator {
       return;
     }
 
+    // Prevent concurrent captures - this is critical for performance
+    // Multiple captures can stack up from interval + step changes
+    if (this.isCaptureInProgress) {
+      console.log('captureAndMatchTarget: Capture already in progress, skipping');
+      return;
+    }
+
+    this.isCaptureInProgress = true;
+    console.log('captureAndMatchTarget: Starting capture (locked)');
+
     try {
       // Check if target window is still active
       const windowInfo = await getActiveWindowTitle();
@@ -529,20 +666,58 @@ class GuidanceCoordinator {
         this.emitEvent('target_window_found', { windowTitle: windowInfo.title });
       }
 
-      // Step 1: Capture screen via Tauri (more reliable than backend window capture)
-      console.log('Capturing screen via Tauri...');
+      // Step 1: Capture target window via Tauri (window-specific, not full screen)
+      // This captures ONLY the target application window, excluding taskbar, sidebars, etc.
       let imageBase64: string | undefined;
-      try {
-        const captureResponse = await captureScreen();
-        if (captureResponse.success && captureResponse.image_base64) {
-          imageBase64 = captureResponse.image_base64;
-          console.log('Tauri screen capture successful, image size:', imageBase64.length);
-        } else {
-          console.warn('Tauri capture failed:', captureResponse.error);
+      const targetPattern = this.state.targetAppSettings?.target_window_pattern;
+
+      if (targetPattern) {
+        // Strip wildcards from pattern for window title matching
+        const cleanPattern = targetPattern.replace(/\*/g, '').trim();
+        console.log('Capturing target window via Tauri, pattern:', cleanPattern);
+
+        try {
+          const captureResponse = await captureWindow(cleanPattern);
+          if (captureResponse.success && captureResponse.image_base64) {
+            imageBase64 = captureResponse.image_base64;
+            console.log('Tauri window capture successful, captured:', captureResponse.monitor_name, 'image size:', imageBase64.length);
+          } else {
+            console.warn('Tauri window capture failed:', captureResponse.error);
+            // Fallback to full screen capture
+            console.log('Falling back to full screen capture...');
+            const fallbackCapture = await captureScreen();
+            if (fallbackCapture.success && fallbackCapture.image_base64) {
+              imageBase64 = fallbackCapture.image_base64;
+              console.log('Fallback screen capture successful');
+            }
+          }
+        } catch (captureError) {
+          console.error('Tauri window capture error:', captureError);
+          // Fallback to full screen capture
+          try {
+            const fallbackCapture = await captureScreen();
+            if (fallbackCapture.success && fallbackCapture.image_base64) {
+              imageBase64 = fallbackCapture.image_base64;
+              console.log('Fallback screen capture successful after error');
+            }
+          } catch (fallbackError) {
+            console.error('Fallback capture also failed:', fallbackError);
+          }
         }
-      } catch (captureError) {
-        console.error('Tauri capture error:', captureError);
-        // Continue without image - backend will attempt its own capture
+      } else {
+        // No target pattern, use full screen capture
+        console.log('No target pattern, using full screen capture...');
+        try {
+          const captureResponse = await captureScreen();
+          if (captureResponse.success && captureResponse.image_base64) {
+            imageBase64 = captureResponse.image_base64;
+            console.log('Tauri screen capture successful, image size:', imageBase64.length);
+          } else {
+            console.warn('Tauri capture failed:', captureResponse.error);
+          }
+        } catch (captureError) {
+          console.error('Tauri capture error:', captureError);
+        }
       }
 
       // Step 2: Call backend to analyze and match target for current step
@@ -558,7 +733,13 @@ class GuidanceCoordinator {
           response: (apiError as { response?: { status?: number; data?: unknown } })?.response?.status,
           responseData: (apiError as { response?: { status?: number; data?: unknown } })?.response?.data,
         });
-        return; // Exit early on API error
+        // Don't return early - let finally block release the lock
+        // Just skip processing by setting captureResult to null
+        captureResult = null;
+      }
+
+      if (!captureResult) {
+        return; // Exit after finally releases the lock
       }
 
       console.log('Processing captureResult:', {
@@ -581,6 +762,10 @@ class GuidanceCoordinator {
       }
     } catch (error) {
       console.error('Capture and match failed:', error);
+    } finally {
+      // Always release the capture lock
+      this.isCaptureInProgress = false;
+      console.log('captureAndMatchTarget: Capture complete (unlocked)');
     }
   }
 

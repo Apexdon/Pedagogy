@@ -2,11 +2,12 @@
 //!
 //! Provides full-resolution and low-resolution capture options
 //! with Base64 PNG encoding for API transmission.
+//! Also supports capturing specific windows by title pattern.
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use image::{DynamicImage, ImageFormat};
 use std::io::Cursor;
-use xcap::Monitor;
+use xcap::{Monitor, Window};
 
 /// Error type for screenshot operations
 #[derive(Debug, thiserror::Error)]
@@ -113,6 +114,47 @@ pub fn capture_low_res(max_width: u32, max_height: u32) -> Result<CaptureResult,
         width: new_width,
         height: new_height,
         monitor_name: full_capture.monitor_name,
+    })
+}
+
+/// Captures a specific window by title pattern.
+///
+/// Uses case-insensitive contains matching.
+/// Returns the first matching window found.
+pub fn capture_window_by_title(title_pattern: &str) -> Result<CaptureResult, ScreenshotError> {
+    let windows = Window::all()
+        .map_err(|e| ScreenshotError::CaptureFailed(format!("Failed to enumerate windows: {}", e)))?;
+
+    // Find window matching the pattern (case-insensitive contains)
+    let pattern_lower = title_pattern.to_lowercase();
+    let target_window = windows
+        .into_iter()
+        .find(|w| w.title().to_lowercase().contains(&pattern_lower))
+        .ok_or_else(|| ScreenshotError::CaptureFailed(format!("No window matching '{}' found", title_pattern)))?;
+
+    let window_name = target_window.title().to_string();
+
+    // Capture the window
+    let image = target_window.capture_image()
+        .map_err(|e| ScreenshotError::CaptureFailed(format!("Failed to capture window '{}': {}", window_name, e)))?;
+
+    let width = image.width();
+    let height = image.height();
+
+    // Convert to PNG bytes
+    let dynamic_image = DynamicImage::ImageRgba8(image);
+    let mut buffer = Cursor::new(Vec::new());
+    dynamic_image.write_to(&mut buffer, ImageFormat::Png)
+        .map_err(|e| ScreenshotError::EncodingFailed(e.to_string()))?;
+
+    // Encode to Base64
+    let image_base64 = BASE64.encode(buffer.into_inner());
+
+    Ok(CaptureResult {
+        image_base64,
+        width,
+        height,
+        monitor_name: window_name, // Use window title instead of monitor name
     })
 }
 

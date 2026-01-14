@@ -114,6 +114,19 @@ export const SidePanelApp: React.FC = () => {
       }
     );
 
+    // Notify the main app that the panel is ready to receive events
+    // This allows the main app to re-send the current session state
+    const notifyReady = async () => {
+      try {
+        const { emit } = await import('@tauri-apps/api/event');
+        await emit('panel:ready', {});
+        console.log('Panel ready event emitted');
+      } catch (error) {
+        console.error('Failed to emit panel ready event:', error);
+      }
+    };
+    notifyReady();
+
     return () => {
       unlistenSessionStarted.then((fn) => fn());
       unlistenStepChanged.then((fn) => fn());

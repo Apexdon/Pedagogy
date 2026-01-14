@@ -10,7 +10,7 @@ mod sidepanel;
 
 use commands::detection_commands::{
     capture_screenshot, capture_screenshot_low_res, capture_screenshot_region,
-    get_active_window_title, get_monitors, is_window_monitoring_active,
+    capture_window, get_active_window_title, get_monitors, is_window_monitoring_active,
     start_window_monitoring, stop_window_monitoring, DetectionState,
 };
 use commands::halo_commands::{
@@ -70,6 +70,7 @@ pub fn run() {
             capture_screenshot,
             capture_screenshot_low_res,
             capture_screenshot_region,
+            capture_window,
             get_active_window_title,
             get_monitors,
             start_window_monitoring,

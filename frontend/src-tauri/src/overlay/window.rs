@@ -212,6 +212,10 @@ impl OverlayManager {
         // Make window visible
         window.show()?;
 
+        // Capture values for logging before moving target
+        let target_id = target.target_id.clone();
+        let step_number = target.step_number;
+
         // Emit event to frontend
         let payload = HaloEventPayload {
             target: Some(target),
@@ -221,7 +225,7 @@ impl OverlayManager {
 
         window.emit(events::SHOW_HALO, payload)?;
 
-        log::debug!("Halo shown");
+        log::info!("Halo shown - target_id: {}, step: {}", target_id, step_number);
         Ok(())
     }
 
@@ -276,6 +280,13 @@ impl OverlayManager {
             .get_webview_window(OVERLAY_WINDOW_LABEL)
             .ok_or(OverlayError::WindowNotFound)?;
 
+        // Ensure window is visible (it might have been hidden by hide_halo)
+        window.show()?;
+
+        // Capture values for logging before moving target
+        let target_id = target.target_id.clone();
+        let step_number = target.step_number;
+
         // Emit update event
         let payload = HaloEventPayload {
             target: Some(target),
@@ -285,7 +296,7 @@ impl OverlayManager {
 
         window.emit(events::UPDATE_HALO, payload)?;
 
-        log::debug!("Halo updated");
+        log::info!("Halo updated - target_id: {}, step: {}", target_id, step_number);
         Ok(())
     }
 

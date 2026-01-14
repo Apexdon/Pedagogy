@@ -8,6 +8,12 @@ from pydantic_settings import BaseSettings
 from functools import lru_cache
 from typing import List
 import os
+from pathlib import Path
+
+# Explicitly load .env file to ensure environment variables are set
+from dotenv import load_dotenv
+env_path = Path(__file__).parent.parent / ".env"
+load_dotenv(env_path, override=True)
 
 
 class Settings(BaseSettings):
@@ -34,7 +40,8 @@ class Settings(BaseSettings):
         "http://localhost:5173",   # Vite default port
         "http://localhost:1420",   # Tauri dev
         "tauri://localhost",       # Tauri production
-        "https://tauri.localhost"  # Tauri production (alternative)
+        "https://tauri.localhost", # Tauri production (alternative)
+        "http://tauri.localhost",  # Tauri production (HTTP)
     ]
 
     # =============================================
@@ -74,7 +81,7 @@ class Settings(BaseSettings):
     OMNIPARSER_ICON_CAPTION_PATH: str = "weights/icon_caption_florence"
     OMNIPARSER_CONFIDENCE_THRESHOLD: float = 0.1  # Lower threshold for more detections
     OMNIPARSER_IOU_THRESHOLD: float = 0.45
-    OMNIPARSER_ENABLE_CAPTIONING: bool = True
+    OMNIPARSER_ENABLE_CAPTIONING: bool = False  # Disabled - using OCR fusion instead (Florence-2 has _supports_sdpa error)
 
     # Legacy YOLO v11 Settings (fallback if OmniParser not available)
     YOLO_MODEL_PATH: str = "yolo11n.pt"
@@ -84,7 +91,7 @@ class Settings(BaseSettings):
     # EasyOCR Settings
     OCR_LANGUAGE: str = "en"
     OCR_USE_GPU: bool = False
-    OCR_CONFIDENCE_THRESHOLD: float = 0.6
+    OCR_CONFIDENCE_THRESHOLD: float = 0.4  # Lowered to detect more text (form labels often low contrast)
 
     # CV Processing Settings
     CV_MAX_IMAGE_SIZE_MB: int = 10
@@ -96,15 +103,22 @@ class Settings(BaseSettings):
     # AI Guidance Engine Configuration (Phase 6)
     # =============================================
 
-    # LLM Provider: "ollama" (local/free) or "openai" (cloud/paid)
-    LLM_PROVIDER: str = "ollama"
+    # LLM Provider: "gemini" (cloud/free tier), "ollama" (local), or "openai" (cloud/paid)
+    LLM_PROVIDER: str = "gemini"
 
-    # Ollama Settings (Local LLM - primary)
+    # Google Gemini Settings (Primary - free tier with good performance)
+    # Get API key from: https://aistudio.google.com/apikey
+    GEMINI_API_KEY: str = ""
+    GEMINI_MODEL: str = "gemini-2.5-flash"  # Best balance of speed and capability
+    GEMINI_MAX_TOKENS: int = 2048
+    GEMINI_TEMPERATURE: float = 0.3
+
+    # Ollama Settings (Fallback - local/offline)
     # Install: https://ollama.ai then run: ollama pull llama3.2
     OLLAMA_BASE_URL: str = "http://localhost:11434"
     OLLAMA_MODEL: str = "llama3.2"
 
-    # OpenAI Settings (cloud fallback)
+    # OpenAI Settings (alternative cloud option)
     OPENAI_API_KEY: str = ""
     OPENAI_MODEL: str = "gpt-4.1"
     OPENAI_MAX_TOKENS: int = 1024
@@ -112,7 +126,7 @@ class Settings(BaseSettings):
 
     # Guidance Generation Settings
     GUIDANCE_MAX_STEPS: int = 20
-    GUIDANCE_MATCH_THRESHOLD: float = 0.6  # Min similarity for element matching
+    GUIDANCE_MATCH_THRESHOLD: float = 0.45  # Min similarity for element matching
     GUIDANCE_RAG_TOP_K: int = 5  # Number of RAG results to include in context
 
     # Session Settings

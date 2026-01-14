@@ -489,12 +489,31 @@ async def guidance_health():
     llm_available = False
     fallback_available = False
     llm_provider = settings.LLM_PROVIDER
-    llm_model = settings.OPENAI_MODEL if llm_provider == "openai" else settings.OLLAMA_MODEL
+
+    # Debug logging
+    logger.info(f"[Health] LLM_PROVIDER from settings: {llm_provider}")
+    logger.info(f"[Health] GEMINI_API_KEY set: {bool(settings.GEMINI_API_KEY)}")
+
+    # Get the model based on provider
+    if llm_provider == "gemini":
+        llm_model = settings.GEMINI_MODEL
+    elif llm_provider == "openai":
+        llm_model = settings.OPENAI_MODEL
+    else:
+        llm_model = settings.OLLAMA_MODEL
+
+    logger.info(f"[Health] Selected model: {llm_model}")
 
     try:
-        from app.ai_engine.llm_client import OpenAIClient, OllamaClient
+        from app.ai_engine.llm_client import get_llm_client, GeminiClient, OpenAIClient, OllamaClient
 
-        if llm_provider == "openai":
+        if llm_provider == "gemini":
+            client = GeminiClient()
+            llm_available = await client.health_check()
+            # Check fallback (Ollama)
+            fallback_client = OllamaClient()
+            fallback_available = await fallback_client.health_check()
+        elif llm_provider == "openai":
             client = OpenAIClient()
             llm_available = await client.health_check()
             fallback_client = OllamaClient()
@@ -502,7 +521,7 @@ async def guidance_health():
         else:
             client = OllamaClient()
             llm_available = await client.health_check()
-            fallback_client = OpenAIClient()
+            fallback_client = GeminiClient()
             fallback_available = await fallback_client.health_check()
     except Exception as e:
         logger.error(f"LLM health check error: {e}")
@@ -830,10 +849,15 @@ async def capture_step(
         )
 
     # Helper function to enrich element labels using nearby OCR text regions
-    def enrich_element_labels_from_ocr(elements, text_regions, max_distance=50):
+    def enrich_element_labels_from_ocr(elements, text_regions, max_distance=100):
         """
         For elements without labels, find nearby OCR text and use it as the label.
         This is a fallback when icon captioning fails.
+
+        Priority:
+        1. Text that overlaps the element
+        2. Text that is immediately adjacent (within element height)
+        3. Text that is nearby (within max_distance)
         """
         enriched_count = 0
         for elem in elements:
@@ -843,10 +867,13 @@ async def capture_step(
             elem_bbox = elem.bbox
             elem_center_x = (elem_bbox.x1 + elem_bbox.x2) / 2
             elem_center_y = (elem_bbox.y1 + elem_bbox.y2) / 2
+            elem_height = elem_bbox.y2 - elem_bbox.y1
+            elem_width = elem_bbox.x2 - elem_bbox.x1
 
             # Find OCR text regions that overlap with or are near this element
             best_text = None
             best_distance = float('inf')
+            best_priority = 999  # Lower is better
 
             for region in text_regions:
                 region_bbox = region.bbox
@@ -860,29 +887,59 @@ async def capture_step(
                 )
 
                 if overlaps:
-                    # If text overlaps the element, use it immediately
+                    # Priority 1: Text overlaps the element - use it immediately
                     elem.label = region.text
                     enriched_count += 1
+                    best_text = None  # Mark as already assigned
                     break
-                else:
-                    # Calculate distance from element center to text center
-                    distance = ((elem_center_x - region_center_x) ** 2 + (elem_center_y - region_center_y) ** 2) ** 0.5
-                    if distance < max_distance and distance < best_distance:
+
+                # Calculate distance from element center to text center
+                distance = ((elem_center_x - region_center_x) ** 2 + (elem_center_y - region_center_y) ** 2) ** 0.5
+
+                # Priority 2: Text immediately to the right or below (common UI patterns)
+                is_right_adjacent = (
+                    abs(region_bbox.y1 - elem_bbox.y1) < elem_height * 0.5 and  # Same vertical level
+                    region_bbox.x1 >= elem_bbox.x2 and  # To the right
+                    region_bbox.x1 - elem_bbox.x2 < elem_width * 2  # Within 2x element width
+                )
+                is_below_adjacent = (
+                    abs(region_center_x - elem_center_x) < elem_width * 0.5 and  # Same horizontal level
+                    region_bbox.y1 >= elem_bbox.y2 and  # Below
+                    region_bbox.y1 - elem_bbox.y2 < elem_height * 2  # Within 2x element height
+                )
+
+                if is_right_adjacent or is_below_adjacent:
+                    priority = 2
+                    if priority < best_priority or (priority == best_priority and distance < best_distance):
+                        best_priority = priority
+                        best_distance = distance
+                        best_text = region.text
+                elif distance < max_distance:
+                    # Priority 3: Nearby text
+                    priority = 3
+                    if priority < best_priority or (priority == best_priority and distance < best_distance):
+                        best_priority = priority
                         best_distance = distance
                         best_text = region.text
 
-            # Use the nearest text if no overlap found and within max_distance
+            # Use the best text found if no overlap was assigned
             if not elem.label and best_text:
                 elem.label = best_text
                 enriched_count += 1
 
         return enriched_count
 
-    # Enrich element labels from OCR text if many elements lack labels
+    # Always try to enrich element labels from OCR (icon captioning often fails)
     elements_without_labels = sum(1 for elem in screen_state.elements if not elem.label)
-    if elements_without_labels > len(screen_state.elements) * 0.5:  # More than 50% lack labels
+    logger.info(f"[CAPTURE_STEP] {elements_without_labels}/{len(screen_state.elements)} elements lack labels, {len(screen_state.text_regions)} OCR text regions available")
+
+    if elements_without_labels > 0 and len(screen_state.text_regions) > 0:
         enriched = enrich_element_labels_from_ocr(screen_state.elements, screen_state.text_regions)
         logger.info(f"[CAPTURE_STEP] Enriched {enriched} element labels from OCR text regions")
+
+        # Log some sample enriched labels
+        sample_labels = [elem.label for elem in screen_state.elements[:10] if elem.label]
+        logger.info(f"[CAPTURE_STEP] Sample element labels after enrichment: {sample_labels[:5]}")
 
     # Convert elements to response format
     all_elements = [
@@ -928,6 +985,7 @@ async def capture_step(
     extracted_keywords = []
 
     logger.info(f"[CAPTURE_STEP] Instruction: {current_step_obj.instruction}, original target_label: {target_label}")
+    print(f"[CAPTURE_STEP] Instruction: {current_step_obj.instruction}, original target_label: {target_label}")
 
     if not target_label and current_step_obj.instruction:
         # Extract quoted text or button/link names from instruction
@@ -959,6 +1017,7 @@ async def capture_step(
         extracted_keywords = [w for w in words if w in ui_keywords]
 
     logger.info(f"[CAPTURE_STEP] After extraction - target_label: {target_label}, keywords: {extracted_keywords}")
+    print(f"[CAPTURE_STEP] After extraction - target_label: {target_label}, keywords: {extracted_keywords}")
 
     target_spec = TargetSpec(
         element_type=current_step_obj.target_element_type,
@@ -969,6 +1028,8 @@ async def capture_step(
 
     logger.info(f"Step {current_step_obj.step_number} target spec: type={target_spec.element_type}, label={target_spec.label}, keywords={target_spec.keywords}, action={target_spec.action}")
     logger.info(f"Detected {len(ui_elements)} UI elements. Sample labels: {[e.label for e in ui_elements[:10] if e.label]}")
+    print(f"[CAPTURE_STEP] Target spec: type={target_spec.element_type}, label='{target_spec.label}', keywords={target_spec.keywords}, action={target_spec.action}")
+    print(f"[CAPTURE_STEP] {len(ui_elements)} UI elements. Sample labels: {[e.label for e in ui_elements[:10] if e.label]}")
 
     match_result = matcher.match_element(target_spec, ui_elements)
     capture_time = (time.time() - start_time) * 1000

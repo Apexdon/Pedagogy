@@ -101,7 +101,11 @@ class ElementMatcher:
         """
         Calculate similarity between target and element labels.
 
-        Uses SequenceMatcher for fuzzy string matching.
+        Uses multiple matching strategies:
+        1. Exact match
+        2. Containment (target in element or vice versa)
+        3. Word overlap (for multi-word labels)
+        4. Fuzzy match using SequenceMatcher
 
         Args:
             target_label: Target label to match
@@ -124,6 +128,27 @@ class ElementMatcher:
         # Check if target is contained in element (or vice versa)
         if target in element or element in target:
             return 0.9
+
+        # Word overlap matching (useful for OCR-enriched labels)
+        # E.g., "Create a password" matches "Password" or "password"
+        target_words = set(re.findall(r'\w+', target))
+        element_words = set(re.findall(r'\w+', element))
+
+        # Remove common stop words
+        stop_words = {'the', 'a', 'an', 'to', 'in', 'on', 'at', 'for', 'and', 'or', 'your', 'click', 'press', 'enter', 'type'}
+        target_words = target_words - stop_words
+        element_words = element_words - stop_words
+
+        if target_words and element_words:
+            # Check for any word overlap
+            common_words = target_words & element_words
+            if common_words:
+                # Calculate overlap ratio
+                overlap_ratio = len(common_words) / min(len(target_words), len(element_words))
+                if overlap_ratio >= 0.5:  # At least half the words match
+                    return 0.85
+                elif overlap_ratio > 0:  # Some words match
+                    return 0.7 + (0.15 * overlap_ratio)
 
         # Fuzzy match using SequenceMatcher
         return SequenceMatcher(None, target, element).ratio()
@@ -197,7 +222,7 @@ class ElementMatcher:
             return 0, 0.0
 
         match_ratio = matches / len(keywords)
-        boost = match_ratio * 0.2  # Up to 20% boost for all keywords
+        boost = match_ratio * 0.4  # Up to 40% boost for all keywords (increased from 20%)
 
         return matches, boost
 
@@ -224,6 +249,8 @@ class ElementMatcher:
         for element in elements:
             confidence = 0.0
             reasons = []
+            label_sim = 0.0
+            keyword_matches = 0
 
             # 1. Label similarity
             if target.label:
@@ -251,11 +278,14 @@ class ElementMatcher:
                 if is_compat and target.action:
                     reasons.append(f"Compatible with action: {target.action}")
 
-            # 3. Keyword matching
+            # 3. Keyword matching - give higher weight when label similarity is low
             if target.keywords:
                 keyword_matches, keyword_boost = self.check_keywords(
                     target.keywords, element
                 )
+                # If label similarity is low, boost keyword importance
+                if target.label and label_sim < 0.5:
+                    keyword_boost *= 2  # Double keyword weight when label doesn't match well
                 confidence += keyword_boost
                 if keyword_matches > 0:
                     reasons.append(f"Keywords found: {keyword_matches}/{len(target.keywords)}")
@@ -266,11 +296,31 @@ class ElementMatcher:
             # Normalize confidence to 0-1 range
             confidence = min(max(confidence, 0.0), 1.0)
 
-            if confidence >= self.match_threshold:
+            # Only add as candidate if:
+            # 1. Overall confidence is above threshold AND
+            # 2. Label similarity is reasonable (at least 0.5) OR there's a keyword match
+            label_sim_ok = target.label and label_sim >= 0.5
+            has_keyword_match = target.keywords and keyword_matches > 0
+
+            # Debug output for matching
+            if element.label and confidence >= 0.3:
+                print(f"[MATCHER] Evaluating '{element.label}': label_sim={label_sim:.2f}, conf={confidence:.2f}, label_ok={label_sim_ok}, kw_match={has_keyword_match}")
+
+            if confidence >= self.match_threshold and (label_sim_ok or has_keyword_match or not target.label):
                 candidates.append((element, confidence, reasons))
 
         if not candidates:
             logger.debug(f"No matching element found for target: {target}")
+            print(f"[MATCHER] No candidates above threshold {self.match_threshold} for target label: '{target.label}'")
+            # Show top 5 elements by label similarity for debugging
+            if target.label:
+                scored = []
+                for elem in elements:
+                    if elem.label:
+                        sim = self.calculate_label_similarity(target.label, elem.label)
+                        scored.append((elem.label, sim))
+                scored.sort(key=lambda x: x[1], reverse=True)
+                print(f"[MATCHER] Top 5 closest labels: {scored[:5]}")
             return None
 
         # Sort by confidence and return best match

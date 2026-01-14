@@ -19,7 +19,7 @@ flowchart TB
 
             subgraph Components["Components"]
                 GQP[GuidanceQueryPanel]
-                GSP[GuidanceSessionPanel]
+                GSP[GuidanceSessionPanel]     
                 HaloComp[HaloOverlay Component]
             end
 
@@ -82,8 +82,8 @@ flowchart TB
         end
 
         subgraph LLMClients["LLM Clients"]
-            OpenAIClient[OpenAI Client<br/>GPT-4.1]
-            OllamaClient[Ollama Client<br/>Local LLM]
+            OllamaClient[Ollama Client<br/>llama3.2 - Primary]
+            OpenAIClient[OpenAI Client<br/>GPT-4.1 - Fallback]
         end
 
         subgraph CVPipeline["CV Pipeline"]
@@ -166,7 +166,7 @@ sequenceDiagram
     participant API as 🐍 FastAPI
     participant RAG as 📚 RAG System
     participant CV as 🔍 CV Pipeline
-    participant LLM as 🧠 LLM (GPT-4.1)
+    participant LLM as 🧠 LLM (Ollama llama3.2)
     participant DB as 💾 Database
 
     Note over U,DB: PHASE 1: Guidance Generation
@@ -285,7 +285,7 @@ flowchart LR
 
     subgraph ML["ML LAYER"]
         direction TB
-        LLM[LLM Clients<br/>OpenAI, Ollama]
+        LLM[LLM Clients<br/>Ollama llama3.2, OpenAI fallback]
         CV[CV Pipeline<br/>OmniParser, YOLO, EasyOCR]
         RAG[RAG System<br/>Embeddings, ChromaDB]
     end

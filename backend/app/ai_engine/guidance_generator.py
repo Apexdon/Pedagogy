@@ -91,7 +91,8 @@ class GuidanceGenerator:
         """Ensure LLM client is initialized."""
         if not self._initialized:
             if self._llm_client is None:
-                self._llm_client = await get_llm_client()
+                # Skip health check for faster initialization (client validates on first use)
+                self._llm_client = await get_llm_client(skip_health_check=True)
             self.reasoner = AIReasoner(self._llm_client)
             self._initialized = True
 

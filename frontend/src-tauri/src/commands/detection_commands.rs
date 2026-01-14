@@ -139,6 +139,40 @@ pub async fn capture_screenshot_region(
     }
 }
 
+/// Captures a specific window by its title pattern.
+///
+/// Uses case-insensitive contains matching to find the window.
+#[tauri::command]
+pub async fn capture_window(
+    title_pattern: String,
+) -> Result<CaptureResponse, String> {
+    log::info!("Capturing window matching '{}'...", title_pattern);
+
+    match screenshot::capture_window_by_title(&title_pattern) {
+        Ok(result) => {
+            log::info!(
+                "Window captured: {}x{} - '{}'",
+                result.width,
+                result.height,
+                result.monitor_name
+            );
+            Ok(CaptureResponse {
+                success: true,
+                result: Some(result),
+                error: None,
+            })
+        }
+        Err(e) => {
+            log::error!("Window capture failed: {}", e);
+            Ok(CaptureResponse {
+                success: false,
+                result: None,
+                error: Some(e.to_string()),
+            })
+        }
+    }
+}
+
 /// Gets the title of the currently active window.
 #[tauri::command]
 pub fn get_active_window_title() -> Result<WindowInfo, String> {

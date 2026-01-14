@@ -79,6 +79,16 @@ export async function captureScreenRegion(
 }
 
 /**
+ * Captures a specific window by title pattern.
+ * This captures ONLY the target window, not the entire screen.
+ */
+export async function captureWindow(titlePattern: string): Promise<CaptureResponse> {
+  return invoke<CaptureResponse>('capture_window', {
+    titlePattern,
+  });
+}
+
+/**
  * Gets the title of the currently active window.
  */
 export async function getActiveWindowTitle(): Promise<WindowInfo> {

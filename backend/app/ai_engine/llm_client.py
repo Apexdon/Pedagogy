@@ -2,8 +2,9 @@
 LLM Client Abstraction
 
 Provides unified interface for LLM providers:
-- OpenAI GPT-4.1 (primary, cloud-based)
+- Google Gemini (primary, cloud-based, free tier)
 - Ollama (fallback, local/offline)
+- OpenAI GPT-4.1 (alternative cloud option)
 """
 
 from abc import ABC, abstractmethod
@@ -11,6 +12,7 @@ from typing import Any, Dict, List, Optional
 import httpx
 import json
 import logging
+import os
 
 from app.config import settings
 
@@ -196,6 +198,191 @@ class OpenAIClient(LLMClient):
             return False
 
 
+class GeminiClient(LLMClient):
+    """
+    Google Gemini API client.
+
+    Primary LLM provider with free tier and excellent performance.
+    Uses the new google-genai SDK.
+    """
+
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        model: Optional[str] = None,
+        max_tokens: Optional[int] = None,
+        temperature: Optional[float] = None,
+    ):
+        """
+        Initialize Gemini client.
+
+        Args:
+            api_key: Gemini API key (defaults to settings or env var)
+            model: Model name (defaults to settings)
+            max_tokens: Max response tokens (defaults to settings)
+            temperature: Sampling temperature (defaults to settings)
+        """
+        self.api_key = api_key or settings.GEMINI_API_KEY or os.getenv("GEMINI_API_KEY")
+        self.model = model or settings.GEMINI_MODEL
+        self.max_tokens = max_tokens or settings.GEMINI_MAX_TOKENS
+        self.temperature = temperature or settings.GEMINI_TEMPERATURE
+        self._client = None
+
+        if not self.api_key:
+            logger.warning("Gemini API key not configured. Set GEMINI_API_KEY in .env or environment.")
+
+    def _get_client(self):
+        """Lazy initialization of Gemini client."""
+        if self._client is None:
+            try:
+                from google import genai
+                self._client = genai.Client(api_key=self.api_key)
+                logger.info(f"[Gemini] Client initialized with model: {self.model}")
+            except ImportError:
+                logger.error("google-genai package not installed. Run: pip install google-genai")
+                raise
+        return self._client
+
+    async def generate(
+        self,
+        prompt: str,
+        system_prompt: Optional[str] = None,
+        **kwargs
+    ) -> str:
+        """Generate text completion using Gemini API."""
+        logger.info(f"[Gemini] Starting generation with model: {self.model}")
+        logger.debug(f"[Gemini] Prompt length: {len(prompt)} chars")
+
+        try:
+            from google.genai import types
+
+            client = self._get_client()
+
+            # Build the content with system instruction if provided
+            config = types.GenerateContentConfig(
+                temperature=kwargs.get("temperature", self.temperature),
+                max_output_tokens=kwargs.get("max_tokens", self.max_tokens),
+            )
+
+            if system_prompt:
+                config.system_instruction = system_prompt
+                logger.debug(f"[Gemini] System prompt length: {len(system_prompt)} chars")
+
+            import time
+            start_time = time.time()
+
+            # Use async client
+            response = await client.aio.models.generate_content(
+                model=self.model,
+                contents=prompt,
+                config=config,
+            )
+
+            elapsed = time.time() - start_time
+            logger.info(f"[Gemini] Response received in {elapsed:.2f}s")
+
+            result = response.text
+            logger.info(f"[Gemini] Response length: {len(result)} chars")
+            return result
+
+        except Exception as e:
+            logger.error(f"[Gemini] Generation error: {type(e).__name__}: {e}")
+            raise
+
+    async def generate_json(
+        self,
+        prompt: str,
+        system_prompt: Optional[str] = None,
+        **kwargs
+    ) -> Dict[str, Any]:
+        """
+        Generate structured JSON response using Gemini's JSON mode.
+
+        Gemini supports response_mime_type: "application/json" for
+        guaranteed valid JSON output.
+        """
+        logger.info(f"[Gemini] generate_json called with model: {self.model}")
+
+        try:
+            from google.genai import types
+
+            client = self._get_client()
+
+            # Enhance system prompt for JSON
+            json_system = system_prompt or ""
+            if "json" not in json_system.lower():
+                json_system += "\n\nYou must respond with valid JSON only."
+
+            # Configure for JSON output
+            config = types.GenerateContentConfig(
+                temperature=kwargs.get("temperature", self.temperature),
+                max_output_tokens=kwargs.get("max_tokens", self.max_tokens),
+                response_mime_type="application/json",
+                system_instruction=json_system,
+            )
+
+            import time
+            start_time = time.time()
+
+            response = await client.aio.models.generate_content(
+                model=self.model,
+                contents=prompt,
+                config=config,
+            )
+
+            elapsed = time.time() - start_time
+            logger.info(f"[Gemini] JSON response received in {elapsed:.2f}s")
+
+            content = response.text
+            logger.debug(f"[Gemini] Raw JSON response length: {len(content)} chars")
+
+            # Parse JSON response
+            try:
+                return json.loads(content)
+            except json.JSONDecodeError as e:
+                logger.error(f"[Gemini] Failed to parse JSON: {e}")
+                logger.error(f"[Gemini] Raw response: {content[:500]}")
+                # Return empty structure on parse failure
+                return {
+                    "steps": [],
+                    "context_summary": "Failed to generate guidance - JSON parse error",
+                    "confidence": 0.0,
+                    "reasoning": f"JSON parse error: {str(e)}",
+                }
+
+        except Exception as e:
+            logger.error(f"[Gemini] generate_json error: {type(e).__name__}: {e}")
+            raise
+
+    async def health_check(self) -> bool:
+        """Check if Gemini API is accessible."""
+        if not self.api_key:
+            logger.warning("[Gemini] Health check failed: No API key configured")
+            return False
+
+        try:
+            import asyncio
+            client = self._get_client()
+            # Simple test generation with timeout to verify API connectivity
+            response = await asyncio.wait_for(
+                client.aio.models.generate_content(
+                    model=self.model,
+                    contents="Hi",
+                ),
+                timeout=10.0  # 10 second timeout for health check
+            )
+            if response.text:
+                logger.info(f"[Gemini] Health check passed. Model: {self.model}")
+                return True
+            return False
+        except asyncio.TimeoutError:
+            logger.error("[Gemini] Health check timed out after 10s")
+            return False
+        except Exception as e:
+            logger.error(f"[Gemini] Health check failed: {type(e).__name__}: {e}")
+            return False
+
+
 class OllamaClient(LLMClient):
     """
     Ollama local LLM client.
@@ -363,16 +550,23 @@ class OllamaClient(LLMClient):
             return False
 
 
+# Module-level cache for LLM clients
+_llm_client_cache: Dict[str, LLMClient] = {}
+_client_initialized: Dict[str, bool] = {}
+
+
 async def get_llm_client(
     provider: Optional[str] = None,
     fallback: bool = True,
+    skip_health_check: bool = False,
 ) -> LLMClient:
     """
-    Get configured LLM client.
+    Get configured LLM client with caching.
 
     Args:
-        provider: Specific provider to use ("openai" or "ollama")
+        provider: Specific provider to use ("gemini", "ollama", or "openai")
         fallback: If True and primary fails, try fallback provider
+        skip_health_check: If True, skip health check (faster initialization)
 
     Returns:
         Configured LLM client instance
@@ -382,35 +576,76 @@ async def get_llm_client(
     """
     provider = provider or settings.LLM_PROVIDER
 
-    if provider == "openai":
-        client = OpenAIClient()
-        if await client.health_check():
-            logger.info("Using OpenAI GPT-4.1 as LLM provider")
-            return client
-        elif fallback:
-            logger.warning("OpenAI not available, falling back to Ollama")
-            fallback_client = OllamaClient()
-            if await fallback_client.health_check():
-                logger.info("Using Ollama as fallback LLM provider")
-                return fallback_client
-            raise RuntimeError("No LLM provider available (OpenAI and Ollama both failed)")
-        else:
-            raise RuntimeError("OpenAI API not available and fallback disabled")
+    # Return cached client if available and already validated
+    if provider in _llm_client_cache and _client_initialized.get(provider, False):
+        logger.debug(f"[LLM] Returning cached {provider} client")
+        return _llm_client_cache[provider]
 
-    elif provider == "ollama":
-        client = OllamaClient()
-        if await client.health_check():
-            logger.info("Using Ollama as LLM provider")
-            return client
-        elif fallback:
-            logger.warning("Ollama not available, falling back to OpenAI")
-            fallback_client = OpenAIClient()
-            if await fallback_client.health_check():
-                logger.info("Using OpenAI as fallback LLM provider")
-                return fallback_client
-            raise RuntimeError("No LLM provider available (Ollama and OpenAI both failed)")
-        else:
-            raise RuntimeError("Ollama not available and fallback disabled")
+    # Define fallback order based on primary provider
+    fallback_order = {
+        "gemini": ["ollama", "openai"],
+        "ollama": ["gemini", "openai"],
+        "openai": ["gemini", "ollama"],
+    }
 
-    else:
+    def get_client_by_name(name: str) -> LLMClient:
+        """Get client instance by provider name."""
+        if name == "gemini":
+            return GeminiClient()
+        elif name == "ollama":
+            return OllamaClient()
+        elif name == "openai":
+            return OpenAIClient()
+        else:
+            raise ValueError(f"Unknown provider: {name}")
+
+    async def try_provider(name: str) -> Optional[LLMClient]:
+        """Try to initialize and optionally health check a provider."""
+        try:
+            # Check cache first
+            if name in _llm_client_cache:
+                client = _llm_client_cache[name]
+            else:
+                client = get_client_by_name(name)
+                _llm_client_cache[name] = client
+
+            # Skip health check if requested (for performance)
+            if skip_health_check:
+                _client_initialized[name] = True
+                return client
+
+            # Only health check if not already validated
+            if not _client_initialized.get(name, False):
+                if await client.health_check():
+                    _client_initialized[name] = True
+                    return client
+                else:
+                    return None
+            return client
+        except Exception as e:
+            logger.warning(f"Provider {name} failed: {e}")
+        return None
+
+    # Try primary provider
+    if provider not in fallback_order:
         raise ValueError(f"Unknown LLM provider: {provider}")
+
+    client = await try_provider(provider)
+    if client:
+        logger.info(f"Using {provider.upper()} as LLM provider")
+        return client
+
+    # Try fallbacks if enabled
+    if fallback:
+        for fallback_provider in fallback_order[provider]:
+            logger.warning(f"{provider} not available, trying {fallback_provider}...")
+            client = await try_provider(fallback_provider)
+            if client:
+                logger.info(f"Using {fallback_provider.upper()} as fallback LLM provider")
+                return client
+
+        raise RuntimeError(
+            f"No LLM provider available. Tried: {provider}, {', '.join(fallback_order[provider])}"
+        )
+    else:
+        raise RuntimeError(f"{provider} not available and fallback disabled")

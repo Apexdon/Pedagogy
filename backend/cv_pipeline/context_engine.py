@@ -79,6 +79,14 @@ class ContextEngine:
         detection_result = self.detector.detect(preprocessed.image)
         ocr_result = self.ocr_engine.extract_text(preprocessed.image)
 
+        print(f"[ContextEngine] Detection found {len(detection_result.elements)} elements")
+        print(f"[ContextEngine] OCR found {len(ocr_result.text_regions)} text regions")
+
+        # Log sample OCR text
+        if ocr_result.text_regions:
+            sample_texts = [r.text for r in ocr_result.text_regions[:10]]
+            print(f"[ContextEngine] Sample OCR texts: {sample_texts}")
+
         # Scale coordinates back to original image size
         elements = self._scale_elements_to_original(
             detection_result.elements,
@@ -92,6 +100,10 @@ class ContextEngine:
         # Fuse text labels with UI elements
         if fuse_labels:
             elements = self._fuse_labels_with_elements(elements, text_regions)
+
+            # Count elements with labels after fusion
+            labeled_count = sum(1 for e in elements if e.label)
+            print(f"[ContextEngine] After fusion: {labeled_count}/{len(elements)} elements have labels")
 
         total_time = (time.perf_counter() - start_time) * 1000
 
@@ -310,8 +322,8 @@ class ContextEngine:
                     best_score = score
                     best_label = region.text
 
-            # Only assign label if score is above threshold
-            if best_score >= 0.3:
+            # Only assign label if score is above threshold (lowered from 0.3 to 0.1 for better coverage)
+            if best_score >= 0.1:
                 labeled_elements.append(UIElement(
                     element_id=elem.element_id,
                     element_type=elem.element_type,
@@ -358,11 +370,15 @@ class ContextEngine:
 
         # Use element size as reference for "nearby" threshold
         reference_size = max(element_bbox.width, element_bbox.height)
-        max_distance = reference_size * 2  # Consider text within 2x element size
+        max_distance = reference_size * 4  # Consider text within 4x element size (increased from 2x)
 
         if distance < max_distance:
             # Linear falloff from 0.7 to 0.0 based on distance
             return 0.7 * (1 - distance / max_distance)
+
+        # Even for far away text, return small score if within 200 pixels
+        if distance < 200:
+            return 0.1
 
         return 0.0
 

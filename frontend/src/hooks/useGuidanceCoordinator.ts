@@ -23,6 +23,11 @@ export interface UseGuidanceCoordinatorOptions {
   onStepTargetFound?: (data: { step: GuidanceStep; target: unknown; bounds: unknown }) => void;
   onSessionCompleted?: (session: GuidanceSession) => void;
   onError?: (error: { message: string; error: string }) => void;
+  // Callbacks for panel navigation buttons
+  onPanelNextClicked?: () => Promise<void>;
+  onPanelPrevClicked?: () => Promise<void>;
+  onPanelSkipClicked?: () => Promise<void>;
+  onPanelEndSession?: () => Promise<void>;
 }
 
 export interface UseGuidanceCoordinatorResult {
@@ -56,6 +61,10 @@ export function useGuidanceCoordinator(
     onStepTargetFound,
     onSessionCompleted,
     onError,
+    onPanelNextClicked,
+    onPanelPrevClicked,
+    onPanelSkipClicked,
+    onPanelEndSession,
   } = options;
 
   // State
@@ -225,6 +234,25 @@ export function useGuidanceCoordinator(
       unsubscribers.forEach(unsub => unsub());
     };
   }, [updateState, onTargetWindowFound, onTargetWindowLost, onStepTargetFound, onSessionCompleted, onError]);
+
+  // Wire up panel navigation callbacks
+  useEffect(() => {
+    const coordinator = coordinatorRef.current;
+
+    // Set callbacks on coordinator for panel events
+    coordinator.onPanelNextClicked = onPanelNextClicked || null;
+    coordinator.onPanelPrevClicked = onPanelPrevClicked || null;
+    coordinator.onPanelSkipClicked = onPanelSkipClicked || null;
+    coordinator.onPanelEndSession = onPanelEndSession || null;
+
+    return () => {
+      // Clear callbacks on cleanup
+      coordinator.onPanelNextClicked = null;
+      coordinator.onPanelPrevClicked = null;
+      coordinator.onPanelSkipClicked = null;
+      coordinator.onPanelEndSession = null;
+    };
+  }, [onPanelNextClicked, onPanelPrevClicked, onPanelSkipClicked, onPanelEndSession]);
 
   // Cleanup on unmount
   useEffect(() => {
