@@ -9,7 +9,7 @@ import { LoginPage, RegisterPage, SelectOrgPage } from '@/pages/auth';
 import { DashboardPage, SettingsPage, GuidancePage, HistoryPage, DetectionTestPage } from '@/pages/dashboard';
 
 // Organisation pages
-import { OnboardPage, ProfilePage, MembersPage, OrgDashboardPage, KnowledgeBasePage } from '@/pages/org';
+import { OnboardPage, ProfilePage, MembersPage, OrgDashboardPage, KnowledgeBasePage, TargetAppsPage } from '@/pages/org';
 
 export const router = createBrowserRouter([
   // Public routes
@@ -117,6 +117,16 @@ export const router = createBrowserRouter([
       <ProtectedRoute>
         <DashboardLayout>
           <KnowledgeBasePage />
+        </DashboardLayout>
+      </ProtectedRoute>
+    ),
+  },
+  {
+    path: '/org/target-apps',
+    element: (
+      <ProtectedRoute>
+        <DashboardLayout>
+          <TargetAppsPage />
         </DashboardLayout>
       </ProtectedRoute>
     ),

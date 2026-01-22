@@ -126,6 +126,126 @@ export async function isWindowMonitoringActive(): Promise<boolean> {
 }
 
 // =============================================
+// Smart Window Matching (Phase 8)
+// =============================================
+
+/**
+ * Smart match mode for target application detection.
+ */
+export type SmartMatchMode = 'url' | 'process' | 'title' | 'auto';
+
+/**
+ * Configuration for smart window matching.
+ */
+export interface SmartMatchConfig {
+  mode: SmartMatchMode;
+  url_patterns?: string[];
+  process_name?: string;
+  title_pattern?: string;
+}
+
+/**
+ * Extended window information including URL for browsers.
+ */
+export interface ExtendedWindowInfo {
+  title: string;
+  process_name: string;
+  process_id: number;
+  hwnd: number;
+  is_browser: boolean;
+  browser_type: string | null;
+  url: string | null;
+  url_domain: string | null;
+  /** Full origin (scheme + domain + port) - stays same across page navigations */
+  url_origin: string | null;
+}
+
+/**
+ * Debug info for smart matching.
+ */
+export interface SmartMatchDebugInfo {
+  window_title: string;
+  process_name: string | null;
+  is_browser: boolean;
+  browser_type: string | null;
+  detected_url: string | null;
+  detected_domain: string | null;
+}
+
+/**
+ * Result of smart window matching.
+ */
+export interface SmartMatchResult {
+  matched: boolean;
+  match_mode_used: string;
+  window_info: ExtendedWindowInfo | null;
+  matched_pattern: string | null;
+  debug_info: SmartMatchDebugInfo;
+}
+
+/**
+ * Gets extended window information including URL for browsers.
+ * Uses Windows UI Automation to extract browser URL from address bar.
+ */
+export async function getExtendedWindowInfo(): Promise<ExtendedWindowInfo | null> {
+  return invoke<ExtendedWindowInfo | null>('get_extended_window_info');
+}
+
+/**
+ * Performs smart window matching using multiple strategies.
+ *
+ * This is the main function for smart target application detection:
+ * - URL: Match browser URL against patterns (best for websites)
+ * - Process: Match process name (best for desktop apps)
+ * - Title: Match window title (legacy fallback)
+ * - Auto: Try all strategies in order (URL -> Process -> Title)
+ */
+export async function smartMatchWindow(config: SmartMatchConfig): Promise<SmartMatchResult> {
+  return invoke<SmartMatchResult>('smart_match_window', { config });
+}
+
+/**
+ * Debug info for a browser window
+ */
+export interface BrowserWindowDebugInfo {
+  title: string;
+  process_name: string;
+}
+
+/**
+ * Lists all open browser windows for debugging.
+ * Useful for discovering what window titles are available for matching.
+ */
+export async function listBrowserWindows(): Promise<BrowserWindowDebugInfo[]> {
+  return invoke<BrowserWindowDebugInfo[]>('list_browser_windows');
+}
+
+/**
+ * Simple foreground window info for visual verification approach.
+ * The backend will verify if this is the target app using OCR on the screenshot.
+ */
+export interface ForegroundWindowInfo {
+  /** Window handle as number for caching/comparison */
+  hwnd: number;
+  /** Window title */
+  title: string;
+  /** Process name (e.g., "chrome.exe", "msedge.exe") */
+  process_name: string;
+  /** Whether this appears to be a browser window */
+  is_browser: boolean;
+}
+
+/**
+ * Gets simple foreground window info for visual verification.
+ * This is a lightweight command that just returns the foreground window's
+ * HWND, title, and process name. The backend will verify if this is the
+ * target application using OCR-based brand keyword matching on the screenshot.
+ */
+export async function getForegroundWindowSimple(): Promise<ForegroundWindowInfo | null> {
+  return invoke<ForegroundWindowInfo | null>('get_foreground_window_simple');
+}
+
+// =============================================
 // Event Listeners
 // =============================================
 

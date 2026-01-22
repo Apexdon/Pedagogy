@@ -12,6 +12,11 @@ use commands::detection_commands::{
     capture_screenshot, capture_screenshot_low_res, capture_screenshot_region,
     capture_window, get_active_window_title, get_monitors, is_window_monitoring_active,
     start_window_monitoring, stop_window_monitoring, DetectionState,
+    // Smart window detection commands
+    get_extended_window_info, smart_match_window, list_browser_windows,
+    get_foreground_window_simple,
+    // Debug commands
+    debug_list_windows,
 };
 use commands::halo_commands::{
     create_overlay_window, destroy_overlay_window, get_halo_state, hide_halo,
@@ -76,6 +81,12 @@ pub fn run() {
             start_window_monitoring,
             stop_window_monitoring,
             is_window_monitoring_active,
+            // Smart window detection commands
+            get_extended_window_info,
+            smart_match_window,
+            list_browser_windows,
+            get_foreground_window_simple,
+            debug_list_windows,
             // Halo overlay commands
             create_overlay_window,
             destroy_overlay_window,

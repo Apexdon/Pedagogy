@@ -36,6 +36,9 @@ export function ProfilePage() {
   const [targetAppName, setTargetAppName] = useState('');
   const [windowPattern, setWindowPattern] = useState('');
   const [processName, setProcessName] = useState('');
+  // Smart matching fields
+  const [matchMode, setMatchMode] = useState<'url' | 'process' | 'title' | 'auto'>('auto');
+  const [urlPattern, setUrlPattern] = useState('');
 
   const isAdmin = role === 'org_admin';
 
@@ -121,6 +124,9 @@ export function ProfilePage() {
       setTargetAppName(settings.target_app_name || '');
       setWindowPattern(settings.target_window_pattern || '');
       setProcessName(settings.target_process_name || '');
+      // Smart matching fields
+      setMatchMode(settings.target_match_mode || 'auto');
+      setUrlPattern(settings.target_url_pattern || '');
     } catch (error) {
       console.error('Failed to load target app settings:', error);
       setTargetSettingsError('Failed to load target application settings');
@@ -139,6 +145,9 @@ export function ProfilePage() {
         target_app_name: targetAppName || undefined,
         target_window_pattern: windowPattern || undefined,
         target_process_name: processName || undefined,
+        // Smart matching fields
+        target_match_mode: matchMode,
+        target_url_pattern: urlPattern || undefined,
       });
 
       setTargetSettingsSuccess('Target application settings saved successfully');
@@ -166,6 +175,8 @@ export function ProfilePage() {
       setTargetAppName('');
       setWindowPattern('');
       setProcessName('');
+      setMatchMode('auto');
+      setUrlPattern('');
       setTargetAppSettings(null);
       setTargetSettingsSuccess('Target application settings cleared');
       setTimeout(() => setTargetSettingsSuccess(null), 3000);
@@ -362,48 +373,93 @@ export function ProfilePage() {
                     type="text"
                     value={targetAppName}
                     onChange={(e) => setTargetAppName(e.target.value)}
-                    placeholder="e.g., Salesforce, Microsoft Excel, SAP"
+                    placeholder="e.g., RS Components, Salesforce, Microsoft Excel"
                   />
                   <p className="text-xs text-gray-500 mt-1">
                     A friendly name for the target application that users will see
                   </p>
                 </div>
 
+                {/* Match Mode Selection */}
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Window Title Pattern
+                    Matching Strategy
                   </label>
-                  <Input
-                    type="text"
-                    value={windowPattern}
-                    onChange={(e) => setWindowPattern(e.target.value)}
-                    placeholder="e.g., *Salesforce*, *Excel*, *SAP Fiori*"
-                  />
+                  <select
+                    value={matchMode}
+                    onChange={(e) => setMatchMode(e.target.value as 'url' | 'process' | 'title' | 'auto')}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                  >
+                    <option value="auto">Auto (Recommended) - Tries URL, then process, then title</option>
+                    <option value="url">URL - Match by browser URL (best for websites)</option>
+                    <option value="process">Process - Match by process name (best for desktop apps)</option>
+                    <option value="title">Title - Match by window title (legacy)</option>
+                  </select>
                   <p className="text-xs text-gray-500 mt-1">
-                    Use wildcards (*) to match window titles. Example: *Salesforce* matches any window with "Salesforce" in the title.
+                    Choose how Pedagogy identifies when users are on the target application
                   </p>
                 </div>
 
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Process Name (Optional)
-                  </label>
-                  <Input
-                    type="text"
-                    value={processName}
-                    onChange={(e) => setProcessName(e.target.value)}
-                    placeholder="e.g., chrome.exe, EXCEL.EXE, firefox.exe"
-                  />
-                  <p className="text-xs text-gray-500 mt-1">
-                    The executable name of the application. Leave blank to match any process.
-                  </p>
-                </div>
+                {/* URL Pattern - Show when mode is URL or Auto */}
+                {(matchMode === 'url' || matchMode === 'auto') && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      URL Pattern {matchMode === 'url' && <span className="text-red-500">*</span>}
+                    </label>
+                    <Input
+                      type="text"
+                      value={urlPattern}
+                      onChange={(e) => setUrlPattern(e.target.value)}
+                      placeholder="e.g., rs-online.com, salesforce.com, *.google.com"
+                    />
+                    <p className="text-xs text-gray-500 mt-1">
+                      Domain pattern for websites. Use wildcards like *.salesforce.com to match subdomains.
+                      The browser URL is extracted automatically when users navigate.
+                    </p>
+                  </div>
+                )}
+
+                {/* Process Name - Show when mode is Process or Auto */}
+                {(matchMode === 'process' || matchMode === 'auto') && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Process Name {matchMode === 'process' && <span className="text-red-500">*</span>}
+                    </label>
+                    <Input
+                      type="text"
+                      value={processName}
+                      onChange={(e) => setProcessName(e.target.value)}
+                      placeholder="e.g., chrome.exe, EXCEL.EXE, Code.exe"
+                    />
+                    <p className="text-xs text-gray-500 mt-1">
+                      The executable name of the application (for desktop apps).
+                    </p>
+                  </div>
+                )}
+
+                {/* Window Title Pattern - Show when mode is Title or Auto */}
+                {(matchMode === 'title' || matchMode === 'auto') && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Window Title Pattern {matchMode === 'title' && <span className="text-red-500">*</span>}
+                    </label>
+                    <Input
+                      type="text"
+                      value={windowPattern}
+                      onChange={(e) => setWindowPattern(e.target.value)}
+                      placeholder="e.g., *Salesforce*, *Excel*, *Visual Studio Code*"
+                    />
+                    <p className="text-xs text-gray-500 mt-1">
+                      Use wildcards (*) to match window titles. This is a fallback method that may not work reliably when users navigate between pages.
+                    </p>
+                  </div>
+                )}
 
                 {/* Save/Clear buttons */}
                 <div className="flex gap-3 pt-4 border-t border-gray-200">
                   <Button
                     onClick={handleSaveTargetApp}
-                    disabled={savingTargetSettings || (!targetAppName && !windowPattern)}
+                    disabled={savingTargetSettings || !targetAppName || (matchMode === 'url' && !urlPattern) || (matchMode === 'process' && !processName) || (matchMode === 'title' && !windowPattern)}
                   >
                     {savingTargetSettings ? 'Saving...' : 'Save Settings'}
                   </Button>

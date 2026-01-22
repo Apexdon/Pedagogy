@@ -15,6 +15,7 @@ from app.models.guidance import (
     StepStatus,
     ActionType,
 )
+from app.models.target_application import TargetApplication
 
 __all__ = [
     # Organisation
@@ -34,4 +35,6 @@ __all__ = [
     "SessionStatus",
     "StepStatus",
     "ActionType",
+    # Target Applications
+    "TargetApplication",
 ]

@@ -94,6 +94,7 @@ export interface GenerateGuidanceRequest {
   kb_id?: string;
   application_context?: string;
   include_screen_capture?: boolean;
+  app_id?: string; // Target application ID for smart window matching
 }
 
 // Response types
@@ -184,11 +185,24 @@ export interface CaptureStepResponse {
   match_confidence: number;
   message: string;
   window_title: string | null;
+  // Visual verification fields
+  target_verified: boolean;  // Whether target app was verified via brand keywords
+  verification_keywords_matched: string[];  // Which keywords were found
+  hwnd_cached: boolean;  // Whether HWND was cached for future quick checks
 }
 
 // =============================================
 // Target Application Settings Types
 // =============================================
+
+/**
+ * Smart match mode for target application detection.
+ * - 'url': Match browser URL against patterns (best for websites)
+ * - 'process': Match process name (best for desktop apps)
+ * - 'title': Match window title (legacy fallback)
+ * - 'auto': Auto-detect - try URL first (if browser), then process, then title
+ */
+export type SmartMatchMode = 'url' | 'process' | 'title' | 'auto';
 
 export interface TargetAppSettings {
   org_id: string;
@@ -197,6 +211,11 @@ export interface TargetAppSettings {
   target_process_name: string | null;
   target_window_class: string | null;
   target_app_config: Record<string, unknown> | null;
+  // Smart matching fields
+  target_match_mode: SmartMatchMode;
+  target_url_pattern: string | null;
+  target_url_patterns: string[] | null;
+  target_brand_keywords: string[] | null;  // Keywords for visual verification via OCR
   is_configured: boolean;
 }
 
@@ -206,6 +225,10 @@ export interface UpdateTargetAppRequest {
   target_process_name?: string;
   target_window_class?: string;
   target_app_config?: Record<string, unknown>;
+  // Smart matching fields
+  target_match_mode?: SmartMatchMode;
+  target_url_pattern?: string;
+  target_url_patterns?: string[];
 }
 
 export interface UpdateTargetAppResponse {
@@ -240,4 +263,100 @@ export interface ValidatePatternResponse {
   is_valid: boolean;
   matching_windows: WindowInfo[];
   error_message: string | null;
+}
+
+// =============================================
+// Multi-Target Application Types (New Model)
+// =============================================
+
+/**
+ * Full target application record from the database.
+ * Supports multiple target apps per organisation.
+ */
+export interface TargetApplication {
+  app_id: string;
+  org_id: string;
+  app_name: string;
+  description: string | null;
+
+  // Matching configuration
+  match_mode: SmartMatchMode;
+  url_pattern: string | null;
+  url_patterns: string[] | null;
+  brand_keywords: string[] | null;  // Keywords for visual verification via OCR
+  process_name: string | null;
+  window_pattern: string | null;
+  window_class: string | null;
+  app_config: Record<string, unknown> | null;
+
+  // Status
+  is_active: boolean;
+  is_default: boolean;
+  is_configured: boolean;
+
+  // Timestamps
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * Request to create a new target application.
+ */
+export interface TargetAppCreateRequest {
+  app_name: string;
+  description?: string;
+  match_mode?: SmartMatchMode;
+  url_pattern?: string;
+  url_patterns?: string[];
+  brand_keywords?: string[];  // Keywords for visual verification via OCR
+  process_name?: string;
+  window_pattern?: string;
+  window_class?: string;
+  app_config?: Record<string, unknown>;
+  is_active?: boolean;
+  is_default?: boolean;
+}
+
+/**
+ * Request to update an existing target application.
+ */
+export interface TargetAppUpdateRequest {
+  app_name?: string;
+  description?: string;
+  match_mode?: SmartMatchMode;
+  url_pattern?: string;
+  url_patterns?: string[];
+  brand_keywords?: string[];  // Keywords for visual verification via OCR
+  process_name?: string;
+  window_pattern?: string;
+  window_class?: string;
+  app_config?: Record<string, unknown>;
+  is_active?: boolean;
+}
+
+/**
+ * Response for list of target applications.
+ */
+export interface TargetAppListResponse {
+  target_apps: TargetApplication[];
+  total_count: number;
+}
+
+/**
+ * Response for delete operation.
+ */
+export interface TargetAppDeleteResponse {
+  success: boolean;
+  message: string;
+  app_id: string;
+}
+
+/**
+ * Response for set default operation.
+ */
+export interface SetDefaultResponse {
+  success: boolean;
+  message: string;
+  app_id: string;
+  previous_default_id: string | null;
 }

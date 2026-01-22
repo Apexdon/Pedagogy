@@ -251,11 +251,18 @@ impl OverlayManager {
             };
             window.emit(events::HIDE_HALO, payload)?;
 
-            // Hide window
-            window.hide()?;
+            // Wait for fade-out animation to complete (300ms) before hiding window
+            // This allows the graceful fade-out animation to play
+            let window_clone = window.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(350)).await;
+                if let Err(e) = window_clone.hide() {
+                    log::warn!("Failed to hide overlay window: {}", e);
+                }
+            });
         }
 
-        log::debug!("Halo hidden");
+        log::debug!("Halo hidden (fade-out animation started)");
         Ok(())
     }
 

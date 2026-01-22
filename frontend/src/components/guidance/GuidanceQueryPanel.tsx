@@ -38,6 +38,7 @@ export function GuidanceQueryPanel() {
         console.error('Failed to fetch knowledge bases:', err);
       }
     };
+
     fetchKBs();
   }, []);
 
@@ -45,6 +46,7 @@ export function GuidanceQueryPanel() {
     e.preventDefault();
     if (!query.trim() || isGenerating) return;
 
+    // Target app is configured by org admins - coordinator will use the default
     await startGuidance(query.trim(), {
       kb_id: selectedKBId || undefined,
       application_context: applicationContext.trim() || undefined,
@@ -92,12 +94,12 @@ export function GuidanceQueryPanel() {
             {/* Application Context (optional) */}
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
-                Application (optional)
+                Application Context (optional)
               </label>
               <Input
                 value={applicationContext}
                 onChange={(e) => setApplicationContext(e.target.value)}
-                placeholder="e.g., Microsoft Word, Chrome"
+                placeholder="Additional context about what you're doing"
                 disabled={isGenerating}
               />
             </div>

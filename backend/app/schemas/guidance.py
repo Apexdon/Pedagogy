@@ -195,6 +195,8 @@ class CaptureStepRequest(BaseModel):
     """Request to capture and analyze screen for current step."""
     image_base64: Optional[str] = Field(None, description="Base64 encoded screenshot from frontend (Tauri)")
     force_capture: bool = Field(False, description="Force new capture even if recent one exists")
+    hwnd: Optional[int] = Field(None, description="Window handle for HWND caching (visual verification)")
+    skip_verification: bool = Field(False, description="Skip visual verification (use if already verified)")
 
 
 class DetectedElement(BaseModel):
@@ -220,6 +222,10 @@ class CaptureStepResponse(BaseModel):
     match_confidence: float = 0.0
     message: str
     window_title: Optional[str] = None
+    # Visual verification fields
+    target_verified: bool = True  # Whether target app was verified via brand keywords
+    verification_keywords_matched: List[str] = []  # Which keywords were found
+    hwnd_cached: bool = False  # Whether HWND was cached for future quick checks
 
 
 class StartGuidanceRequest(BaseModel):
@@ -238,4 +244,50 @@ class StartGuidanceResponse(BaseModel):
     target_window_found: bool
     target_window_title: Optional[str] = None
     current_target: Optional[HaloTargetResponse] = None
+    message: str
+
+
+# =============================================
+# Fast Visual Verification Schemas
+# =============================================
+
+class FastVerifyRequest(BaseModel):
+    """Request for fast visual verification (OCR-only, no UI detection)."""
+    image_base64: str = Field(..., description="Base64 encoded screenshot")
+    brand_keywords: List[str] = Field(..., description="Keywords to search for in OCR text")
+    hwnd: Optional[int] = Field(None, description="Window handle for HWND caching")
+
+
+class FastVerifyResponse(BaseModel):
+    """Response from fast visual verification."""
+    success: bool
+    is_verified: bool
+    matched_keywords: List[str] = []
+    confidence: float = 0.0
+    verification_time_ms: float = 0.0
+    ocr_time_ms: float = 0.0
+    total_time_ms: float = 0.0
+    hwnd_cached: bool = False
+    message: str
+
+
+# =============================================
+# Fast Position Update Schemas (for scroll handling)
+# =============================================
+
+class FastPositionUpdateRequest(BaseModel):
+    """Request for fast halo position update (OCR-only, for scroll handling)."""
+    image_base64: str = Field(..., description="Base64 encoded screenshot")
+    target_label: str = Field(..., description="The label text to find")
+    current_bbox: Optional[BoundingBox] = Field(None, description="Current bounding box for proximity matching")
+
+
+class FastPositionUpdateResponse(BaseModel):
+    """Response from fast position update."""
+    success: bool
+    found: bool
+    new_bbox: Optional[BoundingBox] = None
+    confidence: float = 0.0
+    ocr_time_ms: float = 0.0
+    total_time_ms: float = 0.0
     message: str

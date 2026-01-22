@@ -11,13 +11,19 @@
 
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import {
-  getActiveWindowTitle,
   startWindowMonitoring,
   stopWindowMonitoring,
   isWindowMonitoringActive,
   captureScreen,
   captureWindow,
+  smartMatchWindow,
+  getForegroundWindowSimple,
+  type SmartMatchConfig,
+  type SmartMatchResult,
+  type ForegroundWindowInfo,
 } from '../api/detection';
+import type { SmartMatchMode } from '../types/guidance';
+import { getScreenChangeDetector, type ScreenChangeDetector } from './ScreenChangeDetector';
 import type { WindowMatchEvent } from '../types/detection';
 import {
   createOverlayWindow,
@@ -35,13 +41,14 @@ import {
   setSidePanelTargetPattern,
   isSidePanelCreated,
 } from '../api/sidepanel';
-import { getTargetAppSettings, captureStep } from '../api/guidance';
+import { getTargetAppSettings, getTargetApp, captureStep, fastVerifyTarget, fastPositionUpdate, type FastVerifyResponse, type FastPositionUpdateResponse } from '../api/guidance';
 import type {
   GuidanceSession,
   GuidanceStep,
   HaloTarget,
   TargetAppSettings,
   CaptureStepResponse,
+  TargetApplication,
 } from '../types/guidance';
 import type { WindowPattern } from '../types/detection';
 import type { BoundingBox } from '../overlay/types';
@@ -78,6 +85,12 @@ export interface CoordinatorConfig {
   windowPollIntervalMs: number;
   autoStartOnTargetWindow: boolean;
   showHaloOnStepChange: boolean;
+  /** Use screen change detection instead of fixed interval */
+  useChangeDetection: boolean;
+  /** Polling interval for change detection (ms) */
+  changeDetectionPollMs: number;
+  /** Debounce time after changes stop (ms) */
+  changeDetectionDebounceMs: number;
 }
 
 export type CoordinatorEventType =
@@ -114,6 +127,12 @@ class GuidanceCoordinator {
   private pendingStatusUpdate: Promise<unknown> | null = null;
   private statusUpdateVersion = 0;
   private isCaptureInProgress = false; // Mutex to prevent concurrent captures
+  private screenChangeDetector: ScreenChangeDetector | null = null;
+  private lastForegroundHwnd: number | null = null; // Track foreground window for visual verification
+  private verifiedHwnds: Set<number> = new Set(); // HWNDs verified by backend
+  private fastVerifyIntervalId: ReturnType<typeof setInterval> | null = null; // Fast verification monitor
+  private lastFullCvTime: number = 0; // Throttle full CV analysis
+  private readonly FULL_CV_THROTTLE_MS = 30000; // Only run full CV every 30 seconds max
 
   // Callback for external step advancement (set by useGuidanceCoordinator)
   public onPanelNextClicked: (() => Promise<void>) | null = null;
@@ -123,10 +142,13 @@ class GuidanceCoordinator {
 
   constructor(config?: Partial<CoordinatorConfig>) {
     this.config = {
-      captureIntervalMs: 2000, // Capture every 2 seconds
+      captureIntervalMs: 2000, // Capture every 2 seconds (fallback)
       windowPollIntervalMs: 500, // Check window every 500ms
       autoStartOnTargetWindow: true,
       showHaloOnStepChange: true,
+      useChangeDetection: true, // Use smart change detection by default
+      changeDetectionPollMs: 100, // Check for changes every 100ms
+      changeDetectionDebounceMs: 400, // Wait 400ms after changes stop
       ...config,
     };
 
@@ -179,8 +201,12 @@ class GuidanceCoordinator {
 
   /**
    * Initialize the coordinator with a guidance session
+   * @param session - The guidance session
+   * @param steps - Array of guidance steps
+   * @param appId - Optional target application ID. If provided, loads that specific app's settings.
+   *                If not provided, loads the default target app settings.
    */
-  async initialize(session: GuidanceSession, steps: GuidanceStep[]): Promise<void> {
+  async initialize(session: GuidanceSession, steps: GuidanceStep[], appId?: string): Promise<void> {
     if (this.isDestroyed) {
       throw new Error('Coordinator has been destroyed');
     }
@@ -193,8 +219,8 @@ class GuidanceCoordinator {
       this.allSteps = steps;
       this.state.currentStep = steps.find(s => s.step_number === session.current_step) || steps[0];
 
-      // Load target app settings
-      await this.loadTargetAppSettings();
+      // Load target app settings (specific app if appId provided, otherwise default)
+      await this.loadTargetAppSettings(appId);
 
       // Create overlay window
       const overlayExists = await isOverlayCreated();
@@ -367,6 +393,14 @@ class GuidanceCoordinator {
       // Update the side panel with new step
       this.updateSidePanel(newStep).catch(console.error);
 
+      // Reset change detector baseline so next comparison triggers capture
+      if (this.screenChangeDetector) {
+        this.screenChangeDetector.resetBaseline();
+      }
+
+      // Reset throttle timer - step change should trigger immediate full CV
+      this.lastFullCvTime = 0;
+
       // Trigger immediate capture for new step if we're actively capturing
       if (['capturing', 'showing_halo', 'waiting_action'].includes(this.state.status)) {
         this.captureAndMatchTarget().catch(console.error);
@@ -507,14 +541,53 @@ class GuidanceCoordinator {
   // Window Monitoring
   // =============================================
 
-  private async loadTargetAppSettings(): Promise<void> {
+  /**
+   * Load target application settings.
+   * @param appId - Optional specific app ID. If provided, loads that app's settings.
+   *                If not provided, loads the default target app settings.
+   */
+  private async loadTargetAppSettings(appId?: string): Promise<void> {
     try {
-      const settings = await getTargetAppSettings();
-      this.state.targetAppSettings = settings;
+      if (appId) {
+        // Load specific target app by ID
+        console.log('[GuidanceCoordinator] Loading specific target app:', appId);
+        const targetApp = await getTargetApp(appId);
+
+        // Convert TargetApplication to TargetAppSettings format
+        this.state.targetAppSettings = this.convertToTargetAppSettings(targetApp);
+        console.log('[GuidanceCoordinator] Loaded target app settings:', this.state.targetAppSettings);
+      } else {
+        // Load default target app settings (legacy behavior)
+        console.log('[GuidanceCoordinator] Loading default target app settings');
+        const settings = await getTargetAppSettings();
+        console.log('[GuidanceCoordinator] Received target app settings:', settings);
+        console.log('[GuidanceCoordinator] Brand keywords:', settings?.target_brand_keywords);
+        this.state.targetAppSettings = settings;
+      }
     } catch (error) {
       console.warn('Could not load target app settings:', error);
       this.state.targetAppSettings = null;
     }
+  }
+
+  /**
+   * Convert a TargetApplication response to TargetAppSettings format.
+   * This bridges the new multi-app model with the existing coordinator logic.
+   */
+  private convertToTargetAppSettings(app: TargetApplication): TargetAppSettings {
+    return {
+      org_id: app.org_id,
+      target_app_name: app.app_name,
+      target_window_pattern: app.window_pattern,
+      target_process_name: app.process_name,
+      target_window_class: app.window_class,
+      target_app_config: app.app_config,
+      target_match_mode: app.match_mode,
+      target_url_pattern: app.url_pattern,
+      target_url_patterns: app.url_patterns,
+      target_brand_keywords: app.brand_keywords,
+      is_configured: app.is_configured,
+    };
   }
 
   private async startWindowMonitoring(): Promise<void> {
@@ -592,6 +665,16 @@ class GuidanceCoordinator {
   // =============================================
 
   private startCaptureLoop(): void {
+    // Start fast verification monitor (runs independently, checks every 3 seconds)
+    this.startFastVerificationMonitor();
+
+    // Use change detection mode if enabled
+    if (this.config.useChangeDetection) {
+      this.startChangeDetectionLoop();
+      return;
+    }
+
+    // Fallback to fixed interval mode
     if (this.captureIntervalId) return;
 
     // Initial capture
@@ -602,14 +685,301 @@ class GuidanceCoordinator {
       this.captureAndMatchTarget().catch(console.error);
     }, this.config.captureIntervalMs);
 
-    console.log('Capture loop started');
+    console.log('Capture loop started (fixed interval mode)');
+  }
+
+  /**
+   * Start a fast verification monitor that runs independently of full CV.
+   * This quickly detects when user navigates away from the target app.
+   */
+  private startFastVerificationMonitor(): void {
+    const hasBrandKeywords = this.state.targetAppSettings?.target_brand_keywords &&
+      this.state.targetAppSettings.target_brand_keywords.length > 0;
+
+    if (!hasBrandKeywords) {
+      console.log('[FastVerifyMonitor] No brand keywords configured, skipping monitor');
+      return;
+    }
+
+    if (this.fastVerifyIntervalId) {
+      console.log('[FastVerifyMonitor] Already running');
+      return;
+    }
+
+    console.log('[FastVerifyMonitor] Starting fast verification monitor (every 3s)');
+
+    // Run every 3 seconds to quickly detect when user leaves target
+    this.fastVerifyIntervalId = setInterval(async () => {
+      await this.runFastVerificationCheck();
+    }, 3000);
+  }
+
+  /**
+   * Fast update halo position using OCR-only (for scroll handling).
+   * Much faster than full CV analysis (~5-10s vs ~50s).
+   */
+  private async fastUpdateHaloPosition(): Promise<void> {
+    if (!this.state.currentTarget?.label || !this.state.session) {
+      return;
+    }
+
+    // Capture screen
+    const targetPattern = this.state.targetAppSettings?.target_window_pattern;
+    let imageBase64: string | undefined;
+
+    try {
+      if (targetPattern) {
+        const cleanPattern = targetPattern.replace(/\*/g, '').trim();
+        const captureResponse = await captureWindow(cleanPattern);
+        if (captureResponse.success && captureResponse.image_base64) {
+          imageBase64 = captureResponse.image_base64;
+        }
+      } else {
+        const captureResponse = await captureScreen();
+        if (captureResponse.success && captureResponse.image_base64) {
+          imageBase64 = captureResponse.image_base64;
+        }
+      }
+    } catch {
+      return;
+    }
+
+    if (!imageBase64) {
+      return;
+    }
+
+    // Get current bbox for proximity matching
+    const currentBbox = this.state.currentTarget.bbox ? {
+      x1: this.state.currentTarget.bbox.x1,
+      y1: this.state.currentTarget.bbox.y1,
+      x2: this.state.currentTarget.bbox.x2,
+      y2: this.state.currentTarget.bbox.y2,
+    } : null;
+
+    try {
+      console.log('[FastPositionUpdate] Finding new position for:', this.state.currentTarget.label);
+      const startTime = performance.now();
+
+      const result: FastPositionUpdateResponse = await fastPositionUpdate({
+        image_base64: imageBase64,
+        target_label: this.state.currentTarget.label,
+        current_bbox: currentBbox,
+      });
+
+      const endTime = performance.now();
+      console.log(`[FastPositionUpdate] Completed in ${(endTime - startTime).toFixed(0)}ms, found: ${result.found}`);
+
+      if (result.found && result.new_bbox) {
+        // Update halo position
+        const bounds: BoundingBox = {
+          x: result.new_bbox.x1,
+          y: result.new_bbox.y1,
+          width: result.new_bbox.x2 - result.new_bbox.x1,
+          height: result.new_bbox.y2 - result.new_bbox.y1,
+        };
+
+        // Update current target bbox
+        this.state.currentTarget.bbox = {
+          x1: result.new_bbox.x1,
+          y1: result.new_bbox.y1,
+          x2: result.new_bbox.x2,
+          y2: result.new_bbox.y2,
+        };
+
+        console.log('[FastPositionUpdate] Updating halo to new position:', bounds);
+        await updateGuidanceStepHalo(
+          bounds,
+          this.state.currentTarget.step_number,
+          this.state.currentTarget.label,
+          this.state.currentTarget.target_id,
+          this.state.currentStep?.instruction || '',
+          this.state.currentTarget.action_type,
+          this.state.currentTarget.element_type
+        );
+      } else {
+        // Target not found - might have scrolled off screen
+        console.log('[FastPositionUpdate] Target not visible, hiding halo');
+        await hideHalo();
+      }
+    } catch (error) {
+      console.error('[FastPositionUpdate] Error:', error);
+    }
+  }
+
+  /**
+   * Run a fast verification check to see if user is still on target app.
+   * If not, immediately hide halo without waiting for full CV.
+   */
+  private async runFastVerificationCheck(): Promise<void> {
+    // Don't run if full CV is in progress (it will handle verification)
+    if (this.isCaptureInProgress) {
+      return;
+    }
+
+    const hasBrandKeywords = this.state.targetAppSettings?.target_brand_keywords &&
+      this.state.targetAppSettings.target_brand_keywords.length > 0;
+
+    if (!hasBrandKeywords) {
+      return;
+    }
+
+    // Get foreground window
+    let foregroundWindow: ForegroundWindowInfo | null = null;
+    try {
+      foregroundWindow = await getForegroundWindowSimple();
+    } catch {
+      return;
+    }
+
+    // If HWND is already verified, no need to check
+    if (foregroundWindow && this.verifiedHwnds.has(foregroundWindow.hwnd)) {
+      return;
+    }
+
+    // Capture screen for verification
+    const targetPattern = this.state.targetAppSettings?.target_window_pattern;
+    let verifyImageBase64: string | undefined;
+
+    try {
+      if (targetPattern) {
+        const cleanPattern = targetPattern.replace(/\*/g, '').trim();
+        const captureResponse = await captureWindow(cleanPattern);
+        if (captureResponse.success && captureResponse.image_base64) {
+          verifyImageBase64 = captureResponse.image_base64;
+        }
+      } else {
+        const captureResponse = await captureScreen();
+        if (captureResponse.success && captureResponse.image_base64) {
+          verifyImageBase64 = captureResponse.image_base64;
+        }
+      }
+    } catch {
+      return;
+    }
+
+    if (!verifyImageBase64) {
+      return;
+    }
+
+    // Run fast verification
+    try {
+      console.log('[FastVerifyMonitor] Running quick check...');
+      const fastResult = await fastVerifyTarget({
+        image_base64: verifyImageBase64,
+        brand_keywords: this.state.targetAppSettings!.target_brand_keywords!,
+        hwnd: foregroundWindow?.hwnd || null,
+      });
+
+      console.log('[FastVerifyMonitor] Result:', fastResult.is_verified ? 'ON target' : 'OFF target');
+
+      if (!fastResult.is_verified) {
+        // User left target app - immediately hide halo
+        console.log('[FastVerifyMonitor] User left target app, hiding halo immediately');
+
+        if (this.state.isTargetWindowActive) {
+          this.state.isTargetWindowActive = false;
+          this.emitEvent('target_window_lost', { windowTitle: foregroundWindow?.title || '' });
+        }
+
+        if (foregroundWindow) {
+          this.verifiedHwnds.delete(foregroundWindow.hwnd);
+        }
+
+        await hideHalo();
+        this.state.currentTarget = null;
+      } else {
+        // User is on target - cache HWND
+        if (fastResult.hwnd_cached && foregroundWindow) {
+          this.verifiedHwnds.add(foregroundWindow.hwnd);
+        }
+
+        if (!this.state.isTargetWindowActive) {
+          this.state.isTargetWindowActive = true;
+          this.emitEvent('target_window_found', { windowTitle: foregroundWindow?.title || '' });
+        }
+      }
+    } catch (error) {
+      console.error('[FastVerifyMonitor] Error:', error);
+    }
+  }
+
+  /**
+   * Start capture loop using screen change detection.
+   * Only re-captures when screen content changes (e.g., user scrolls).
+   */
+  private startChangeDetectionLoop(): void {
+    if (this.screenChangeDetector) {
+      console.log('[GuidanceCoordinator] Change detection already running');
+      return;
+    }
+
+    // Get or create the screen change detector
+    this.screenChangeDetector = getScreenChangeDetector({
+      pollIntervalMs: this.config.changeDetectionPollMs,
+      debounceMs: this.config.changeDetectionDebounceMs,
+      detectWidth: 160,
+      detectHeight: 120,
+      changeThreshold: 0.05,
+    });
+
+    // Get target window pattern for focused capture
+    const targetPattern = this.state.targetAppSettings?.target_window_pattern
+      ?.replace(/\*/g, '')
+      .trim();
+
+    // Perform initial capture
+    console.log('[GuidanceCoordinator] Performing initial capture...');
+    this.lastFullCvTime = Date.now();
+    this.captureAndMatchTarget().catch(console.error);
+
+    // Start change detection - callback fires when screen changes
+    this.screenChangeDetector.start(
+      () => {
+        // Screen changed (user scrolled) - use FAST position update instead of full CV
+        // This finds the target label's new position using OCR-only (~5-10s vs ~50s)
+        if (this.state.currentTarget?.label) {
+          console.log('[GuidanceCoordinator] Screen change detected, running fast position update...');
+          this.fastUpdateHaloPosition().catch(console.error);
+        } else {
+          // No current target - need full CV to find one
+          const now = Date.now();
+          const timeSinceLastCv = now - this.lastFullCvTime;
+
+          if (timeSinceLastCv < this.FULL_CV_THROTTLE_MS) {
+            console.log(`[GuidanceCoordinator] No target yet, throttling CV (${Math.round(timeSinceLastCv / 1000)}s since last run)`);
+            return;
+          }
+
+          console.log('[GuidanceCoordinator] No target yet, running full CV analysis...');
+          this.lastFullCvTime = now;
+          this.captureAndMatchTarget().catch(console.error);
+        }
+      },
+      targetPattern || undefined
+    );
+
+    console.log('[GuidanceCoordinator] Capture loop started (change detection mode)');
   }
 
   private stopCaptureLoop(): void {
+    // Stop fixed interval capture
     if (this.captureIntervalId) {
       clearInterval(this.captureIntervalId);
       this.captureIntervalId = null;
     }
+
+    // Stop fast verification monitor
+    if (this.fastVerifyIntervalId) {
+      clearInterval(this.fastVerifyIntervalId);
+      this.fastVerifyIntervalId = null;
+    }
+
+    // Stop change detection
+    if (this.screenChangeDetector) {
+      this.screenChangeDetector.stop();
+      this.screenChangeDetector = null;
+    }
+
     console.log('Capture loop stopped');
   }
 
@@ -637,33 +1007,164 @@ class GuidanceCoordinator {
     console.log('captureAndMatchTarget: Starting capture (locked)');
 
     try {
-      // Check if target window is still active
-      const windowInfo = await getActiveWindowTitle();
-      const isTargetActive = this.isTargetWindow(windowInfo.title);
-
-      console.log('Capture check - Window:', windowInfo.title, 'Pattern:', this.state.targetAppSettings?.target_window_pattern, 'Match:', isTargetActive);
-
-      if (!isTargetActive && this.state.isTargetWindowActive) {
-        console.log('Target window lost, hiding halo');
-        this.state.isTargetWindowActive = false;
-        this.emitEvent('target_window_lost', { windowTitle: windowInfo.title });
-        await hideHalo();
-        return;
+      // Get foreground window info for HWND tracking
+      let foregroundWindow: ForegroundWindowInfo | null = null;
+      try {
+        foregroundWindow = await getForegroundWindowSimple();
+        if (foregroundWindow) {
+          this.lastForegroundHwnd = foregroundWindow.hwnd;
+          console.log('Foreground window:', {
+            hwnd: foregroundWindow.hwnd,
+            title: foregroundWindow.title,
+            process: foregroundWindow.process_name,
+            isBrowser: foregroundWindow.is_browser,
+          });
+        }
+      } catch (e) {
+        console.warn('Failed to get foreground window info:', e);
       }
 
-      if (!isTargetActive) {
-        console.log('Not on target window, skipping capture');
-        return; // Don't capture if not on target window
-      }
+      // VISUAL VERIFICATION APPROACH:
+      // If brand keywords are configured, we use FAST verification (OCR-only) first
+      // before running the expensive full CV analysis (~85 seconds).
+      // This significantly improves responsiveness.
+      const hasBrandKeywords = this.state.targetAppSettings?.target_brand_keywords &&
+        this.state.targetAppSettings.target_brand_keywords.length > 0;
 
-      console.log('Target window is active, proceeding to capture...');
+      // Check if this HWND is already verified (cached)
+      const isHwndVerified = foregroundWindow &&
+        this.verifiedHwnds.has(foregroundWindow.hwnd);
 
-      // Emit event when target window is first found
-      const wasActive = this.state.isTargetWindowActive;
-      this.state.isTargetWindowActive = true;
-      if (!wasActive) {
-        console.log('First time target found, emitting event');
-        this.emitEvent('target_window_found', { windowTitle: windowInfo.title });
+      if (hasBrandKeywords) {
+        console.log('[Visual Verification] Brand keywords configured:', this.state.targetAppSettings?.target_brand_keywords);
+        console.log('[Visual Verification] HWND verified (cached):', isHwndVerified);
+
+        // If HWND is already verified, skip fast verification and go straight to full CV
+        if (!isHwndVerified) {
+          // Need to capture screen first for fast verification
+          const targetPattern = this.state.targetAppSettings?.target_window_pattern;
+          let verifyImageBase64: string | undefined;
+
+          if (targetPattern) {
+            const cleanPattern = targetPattern.replace(/\*/g, '').trim();
+            try {
+              const captureResponse = await captureWindow(cleanPattern);
+              if (captureResponse.success && captureResponse.image_base64) {
+                verifyImageBase64 = captureResponse.image_base64;
+              }
+            } catch {
+              // Fallback to screen capture
+              const fallback = await captureScreen();
+              if (fallback.success && fallback.image_base64) {
+                verifyImageBase64 = fallback.image_base64;
+              }
+            }
+          } else {
+            const captureResponse = await captureScreen();
+            if (captureResponse.success && captureResponse.image_base64) {
+              verifyImageBase64 = captureResponse.image_base64;
+            }
+          }
+
+          if (verifyImageBase64) {
+            // Run FAST verification (OCR-only, ~5-10 seconds vs ~85 seconds)
+            console.log('[Visual Verification] Running FAST verification (OCR-only)...');
+            const fastStartTime = performance.now();
+
+            try {
+              const fastResult: FastVerifyResponse = await fastVerifyTarget({
+                image_base64: verifyImageBase64,
+                brand_keywords: this.state.targetAppSettings!.target_brand_keywords!,
+                hwnd: foregroundWindow?.hwnd || null,
+              });
+
+              const fastEndTime = performance.now();
+              console.log(`[Visual Verification] FAST verification completed in ${(fastEndTime - fastStartTime).toFixed(0)}ms`);
+              console.log('[Visual Verification] Result:', {
+                verified: fastResult.is_verified,
+                keywords: fastResult.matched_keywords,
+                ocrTime: fastResult.ocr_time_ms,
+                totalTime: fastResult.total_time_ms,
+              });
+
+              if (!fastResult.is_verified) {
+                // Not on target application - hide halo and return early
+                console.log('[Visual Verification] NOT on target app:', fastResult.message);
+
+                if (this.state.isTargetWindowActive) {
+                  this.state.isTargetWindowActive = false;
+                  this.emitEvent('target_window_lost', { windowTitle: foregroundWindow?.title || '' });
+                }
+
+                // Remove from verified cache if it was there
+                if (foregroundWindow) {
+                  this.verifiedHwnds.delete(foregroundWindow.hwnd);
+                }
+
+                await hideHalo();
+                this.state.currentTarget = null;
+                return; // Skip full CV analysis
+              }
+
+              // Target verified via fast OCR
+              console.log('[Visual Verification] Target VERIFIED via fast OCR');
+
+              // Cache the verified HWND locally
+              if (fastResult.hwnd_cached && foregroundWindow) {
+                this.verifiedHwnds.add(foregroundWindow.hwnd);
+                console.log('[Visual Verification] HWND added to local cache:', foregroundWindow.hwnd);
+              }
+
+              // Update target window active state
+              const wasActive = this.state.isTargetWindowActive;
+              this.state.isTargetWindowActive = true;
+              if (!wasActive) {
+                this.emitEvent('target_window_found', { windowTitle: foregroundWindow?.title || '' });
+              }
+
+            } catch (fastError) {
+              console.error('[Visual Verification] Fast verification failed:', fastError);
+              // Continue to full CV analysis as fallback
+            }
+          }
+        } else {
+          console.log('[Visual Verification] HWND already verified, skipping fast verification');
+        }
+
+        // Proceed to full CV analysis (for element matching)
+      } else {
+        // Legacy mode - use smart matching
+        const matchResult = await this.checkTargetWindowSmart();
+
+        console.log('Smart match result:', {
+          matched: matchResult.matched,
+          mode: matchResult.match_mode_used,
+          pattern: matchResult.matched_pattern,
+          debug: matchResult.debug_info,
+        });
+
+        if (!matchResult.matched && this.state.isTargetWindowActive) {
+          console.log('Target window lost, hiding halo');
+          this.state.isTargetWindowActive = false;
+          this.emitEvent('target_window_lost', { windowTitle: matchResult.debug_info.window_title });
+          await hideHalo();
+          return;
+        }
+
+        if (!matchResult.matched) {
+          console.log('Not on target window, skipping capture');
+          return; // Don't capture if not on target window
+        }
+
+        console.log('Target window is active, proceeding to capture...');
+
+        // Emit event when target window is first found
+        const wasActive = this.state.isTargetWindowActive;
+        this.state.isTargetWindowActive = true;
+        if (!wasActive) {
+          console.log('First time target found, emitting event');
+          this.emitEvent('target_window_found', { windowTitle: matchResult.debug_info.window_title });
+        }
       }
 
       // Step 1: Capture target window via Tauri (window-specific, not full screen)
@@ -721,10 +1222,21 @@ class GuidanceCoordinator {
       }
 
       // Step 2: Call backend to analyze and match target for current step
-      console.log('About to call captureStep for session:', this.state.session.session_id, 'with image:', !!imageBase64);
+      // Pass HWND for visual verification caching
+      // IMPORTANT: Skip verification if we already verified via fast OCR endpoint
+      // This avoids redundant OCR processing in the full CV pipeline
+      const skipVerification = hasBrandKeywords || isHwndVerified;
+      const captureOptions: { hwnd?: number; skipVerification?: boolean } = {
+        hwnd: foregroundWindow?.hwnd,
+        skipVerification: skipVerification || undefined,
+      };
+      console.log('[CaptureStep] skipVerification:', skipVerification, '(hasBrandKeywords:', hasBrandKeywords, ', isHwndVerified:', isHwndVerified, ')');
+      console.log('About to call captureStep for session:', this.state.session.session_id,
+        'with image:', !!imageBase64, 'hwnd:', captureOptions.hwnd, 'skipVerification:', captureOptions.skipVerification);
+
       let captureResult;
       try {
-        captureResult = await captureStep(this.state.session.session_id, imageBase64);
+        captureResult = await captureStep(this.state.session.session_id, imageBase64, captureOptions);
         console.log('captureStep result:', captureResult);
       } catch (apiError) {
         console.error('captureStep API error:', apiError);
@@ -740,6 +1252,49 @@ class GuidanceCoordinator {
 
       if (!captureResult) {
         return; // Exit after finally releases the lock
+      }
+
+      // Handle visual verification response from backend (only if verification wasn't skipped)
+      // When skipVerification is true, the backend assumes we already verified via fast OCR
+      if (!skipVerification && captureResult.target_verified !== undefined) {
+        console.log('[Visual Verification] Backend result:', {
+          verified: captureResult.target_verified,
+          keywords: captureResult.verification_keywords_matched,
+          hwndCached: captureResult.hwnd_cached,
+        });
+
+        if (!captureResult.target_verified) {
+          // Not on target application - handle accordingly
+          console.log('[Visual Verification] Not on target app:', captureResult.message);
+
+          if (this.state.isTargetWindowActive) {
+            this.state.isTargetWindowActive = false;
+            this.emitEvent('target_window_lost', { windowTitle: foregroundWindow?.title || '' });
+          }
+
+          // Remove from verified cache if it was there
+          if (foregroundWindow) {
+            this.verifiedHwnds.delete(foregroundWindow.hwnd);
+          }
+
+          await hideHalo();
+          this.state.currentTarget = null;
+          return;
+        }
+
+        // Target verified - update cache and state
+        if (captureResult.hwnd_cached && foregroundWindow) {
+          this.verifiedHwnds.add(foregroundWindow.hwnd);
+          console.log('[Visual Verification] HWND added to local cache:', foregroundWindow.hwnd);
+        }
+
+        // Update target window active state
+        const wasActiveVer = this.state.isTargetWindowActive;
+        this.state.isTargetWindowActive = true;
+        if (!wasActiveVer) {
+          console.log('[Visual Verification] Target window verified, emitting event');
+          this.emitEvent('target_window_found', { windowTitle: foregroundWindow?.title || '' });
+        }
       }
 
       console.log('Processing captureResult:', {
@@ -769,22 +1324,67 @@ class GuidanceCoordinator {
     }
   }
 
-  private isTargetWindow(windowTitle: string): boolean {
-    if (!this.state.targetAppSettings?.target_window_pattern) {
-      return true; // If no pattern, assume any window is valid
+  /**
+   * Check if target window is active using smart matching.
+   * Uses URL matching for browsers, process matching for desktop apps,
+   * and falls back to title matching.
+   */
+  private async checkTargetWindowSmart(): Promise<SmartMatchResult> {
+    const settings = this.state.targetAppSettings;
+
+    // If no target configured, always match
+    if (!settings?.is_configured) {
+      return {
+        matched: true,
+        match_mode_used: 'none',
+        window_info: null,
+        matched_pattern: null,
+        debug_info: {
+          window_title: '',
+          process_name: null,
+          is_browser: false,
+          browser_type: null,
+          detected_url: null,
+          detected_domain: null,
+        },
+      };
     }
 
-    // Strip wildcard characters (*) from pattern for simple contains matching
-    const pattern = this.state.targetAppSettings.target_window_pattern
-      .replace(/\*/g, '')
-      .toLowerCase()
-      .trim();
+    // Build smart match config from target app settings
+    const config: SmartMatchConfig = {
+      // Use match mode from settings, default to 'auto'
+      mode: (settings.target_match_mode as SmartMatchMode) || 'auto',
+      // URL patterns for website matching
+      url_patterns: settings.target_url_patterns ||
+        (settings.target_url_pattern ? [settings.target_url_pattern] : undefined),
+      // Process name for desktop app matching
+      process_name: settings.target_process_name || undefined,
+      // Window title pattern (legacy fallback)
+      title_pattern: settings.target_window_pattern || undefined,
+    };
 
-    if (!pattern) {
-      return true; // Empty pattern after stripping wildcards
+    console.log('[GuidanceCoordinator] Smart match config:', config);
+
+    try {
+      return await smartMatchWindow(config);
+    } catch (error) {
+      console.error('[GuidanceCoordinator] Smart match failed:', error);
+      // Return no match on error
+      return {
+        matched: false,
+        match_mode_used: 'error',
+        window_info: null,
+        matched_pattern: null,
+        debug_info: {
+          window_title: '',
+          process_name: null,
+          is_browser: false,
+          browser_type: null,
+          detected_url: null,
+          detected_domain: null,
+        },
+      };
     }
-
-    return windowTitle.toLowerCase().includes(pattern);
   }
 
   // =============================================

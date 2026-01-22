@@ -34,10 +34,15 @@ class Organisation(Base):
 
     # Target Application Settings (for CV pipeline window capture)
     target_app_name = Column(String(255), nullable=True)  # e.g., "VS Code", "Salesforce"
-    target_window_pattern = Column(String(500), nullable=True)  # e.g., "*Visual Studio Code*"
+    target_window_pattern = Column(String(500), nullable=True)  # e.g., "*Visual Studio Code*" (legacy)
     target_process_name = Column(String(255), nullable=True)  # e.g., "Code.exe", "chrome.exe"
     target_window_class = Column(String(255), nullable=True)  # Windows-specific class name
     target_app_config = Column(JSON, nullable=True)  # Additional app-specific config
+
+    # Smart Target Matching (Phase 8 - improved window detection)
+    target_match_mode = Column(String(50), default="auto")  # "url" | "process" | "title" | "auto"
+    target_url_pattern = Column(String(500), nullable=True)  # For websites: "rs-online.com" or "*.salesforce.com"
+    target_url_patterns = Column(JSON, nullable=True)  # Array of URL patterns for multi-domain sites
 
     # Relationships - through junction table
     members = relationship("UserOrganisation", back_populates="organisation", cascade="all, delete-orphan")

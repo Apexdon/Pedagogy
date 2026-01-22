@@ -126,8 +126,12 @@ class ElementMatcher:
             return 1.0
 
         # Check if target is contained in element (or vice versa)
-        if target in element or element in target:
-            return 0.9
+        # But require minimum length to avoid single-character false positives
+        # e.g., "C" should not match "Create a password" just because "c" is in "create"
+        min_containment_length = 3
+        if len(element) >= min_containment_length and len(target) >= min_containment_length:
+            if target in element or element in target:
+                return 0.9
 
         # Word overlap matching (useful for OCR-enriched labels)
         # E.g., "Create a password" matches "Password" or "password"

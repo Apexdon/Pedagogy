@@ -251,6 +251,21 @@ class UpdateTargetAppRequest(BaseModel):
     target_process_name: Optional[str] = Field(None, max_length=255)
     target_window_class: Optional[str] = Field(None, max_length=255)
     target_app_config: Optional[Dict[str, Any]] = None
+    # Smart matching fields
+    target_match_mode: Optional[str] = Field(
+        None,
+        pattern="^(url|process|title|auto)$",
+        description="Matching strategy: 'url' for websites, 'process' for desktop apps, 'title' for legacy, 'auto' to detect"
+    )
+    target_url_pattern: Optional[str] = Field(
+        None,
+        max_length=500,
+        description="URL domain pattern for websites (e.g., 'rs-online.com', '*.salesforce.com')"
+    )
+    target_url_patterns: Optional[List[str]] = Field(
+        None,
+        description="Array of URL patterns for multi-domain sites"
+    )
 
 
 class TargetAppResponse(BaseModel):
@@ -261,6 +276,11 @@ class TargetAppResponse(BaseModel):
     target_process_name: Optional[str] = None
     target_window_class: Optional[str] = None
     target_app_config: Optional[Dict[str, Any]] = None
+    # Smart matching fields
+    target_match_mode: str = "auto"
+    target_url_pattern: Optional[str] = None
+    target_url_patterns: Optional[List[str]] = None
+    target_brand_keywords: Optional[List[str]] = None  # Keywords for visual verification via OCR
     is_configured: bool = False
 
     class Config:

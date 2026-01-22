@@ -39,6 +39,7 @@ from app.schemas.organisation import (
     ValidatePatternResponse,
 )
 from app.models.knowledge import KnowledgeBase, Document, DocumentChunk
+from app.models.target_application import TargetApplication
 from typing import List
 
 router = APIRouter()
@@ -737,7 +738,10 @@ async def join_organisation(
 
 
 # =============================================
-# Target Application Settings Endpoints
+# Target Application Settings Endpoints (Legacy)
+# These endpoints now use the TargetApplication model
+# for backwards compatibility with existing frontend code.
+# New code should use /target-apps endpoints instead.
 # =============================================
 
 @router.get("/target-app", response_model=TargetAppResponse)
@@ -749,29 +753,49 @@ async def get_target_app_settings(
     """
     Get target application settings for the current organisation.
 
-    Returns the configured window pattern and process name used for
-    targeted screen capture during guidance sessions.
+    Returns the default target application's settings.
+    For multi-app support, use /target-apps endpoints.
     """
+    # Get the default target app from the new model
     result = await db.execute(
-        select(Organisation).where(Organisation.org_id == membership.org_id)
-    )
-    organisation = result.scalar_one_or_none()
-
-    if not organisation:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Organisation not found"
+        select(TargetApplication).where(
+            TargetApplication.org_id == membership.org_id,
+            TargetApplication.is_default == True,
+            TargetApplication.is_active == True
         )
-
-    return TargetAppResponse(
-        org_id=organisation.org_id,
-        target_app_name=organisation.target_app_name,
-        target_window_pattern=organisation.target_window_pattern,
-        target_process_name=organisation.target_process_name,
-        target_window_class=organisation.target_window_class,
-        target_app_config=organisation.target_app_config,
-        is_configured=organisation.has_target_app_configured,
     )
+    target_app = result.scalar_one_or_none()
+
+    # If no default, try to get the first active app
+    if not target_app:
+        result = await db.execute(
+            select(TargetApplication).where(
+                TargetApplication.org_id == membership.org_id,
+                TargetApplication.is_active == True
+            ).order_by(TargetApplication.created_at)
+        )
+        target_app = result.scalars().first()
+
+    # Build response from target app or return empty config
+    if target_app:
+        return TargetAppResponse(
+            org_id=membership.org_id,
+            target_app_name=target_app.app_name,
+            target_window_pattern=target_app.window_pattern,
+            target_process_name=target_app.process_name,
+            target_window_class=target_app.window_class,
+            target_app_config=target_app.app_config,
+            target_match_mode=target_app.match_mode or "auto",
+            target_url_pattern=target_app.url_pattern,
+            target_url_patterns=target_app.url_patterns,
+            target_brand_keywords=target_app.brand_keywords,
+            is_configured=target_app.is_configured,
+        )
+    else:
+        return TargetAppResponse(
+            org_id=membership.org_id,
+            is_configured=False,
+        )
 
 
 @router.put("/target-app", response_model=UpdateTargetAppResponse)
@@ -784,51 +808,65 @@ async def update_target_app_settings(
     """
     Update target application settings for the organisation.
 
-    Only org_admin or manager can update these settings.
-
-    - **target_app_name**: Friendly name (e.g., "VS Code", "Salesforce")
-    - **target_window_pattern**: Window title pattern with wildcards (e.g., "*Visual Studio Code*")
-    - **target_process_name**: Process executable name (e.g., "Code.exe")
-    - **target_window_class**: Windows-specific class name (advanced)
-    - **target_app_config**: Additional configuration as JSON
+    Creates or updates the default target application.
+    For multi-app support, use /target-apps endpoints.
     """
+    # Get the default target app
     result = await db.execute(
-        select(Organisation).where(Organisation.org_id == membership.org_id)
-    )
-    organisation = result.scalar_one_or_none()
-
-    if not organisation:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Organisation not found"
+        select(TargetApplication).where(
+            TargetApplication.org_id == membership.org_id,
+            TargetApplication.is_default == True
         )
+    )
+    target_app = result.scalar_one_or_none()
+
+    if not target_app:
+        # Create a new default target app
+        target_app = TargetApplication(
+            org_id=membership.org_id,
+            app_name=request.target_app_name or "Default App",
+            is_default=True,
+            is_active=True,
+        )
+        db.add(target_app)
 
     # Update fields if provided
     if request.target_app_name is not None:
-        organisation.target_app_name = request.target_app_name
+        target_app.app_name = request.target_app_name
     if request.target_window_pattern is not None:
-        organisation.target_window_pattern = request.target_window_pattern
+        target_app.window_pattern = request.target_window_pattern
     if request.target_process_name is not None:
-        organisation.target_process_name = request.target_process_name
+        target_app.process_name = request.target_process_name
     if request.target_window_class is not None:
-        organisation.target_window_class = request.target_window_class
+        target_app.window_class = request.target_window_class
     if request.target_app_config is not None:
-        organisation.target_app_config = request.target_app_config
+        target_app.app_config = request.target_app_config
+    # Smart matching fields
+    if request.target_match_mode is not None:
+        target_app.match_mode = request.target_match_mode
+    if request.target_url_pattern is not None:
+        target_app.url_pattern = request.target_url_pattern
+    if request.target_url_patterns is not None:
+        target_app.url_patterns = request.target_url_patterns
 
     await db.commit()
-    await db.refresh(organisation)
+    await db.refresh(target_app)
 
     return UpdateTargetAppResponse(
         success=True,
         message="Target application settings updated",
         target_app=TargetAppResponse(
-            org_id=organisation.org_id,
-            target_app_name=organisation.target_app_name,
-            target_window_pattern=organisation.target_window_pattern,
-            target_process_name=organisation.target_process_name,
-            target_window_class=organisation.target_window_class,
-            target_app_config=organisation.target_app_config,
-            is_configured=organisation.has_target_app_configured,
+            org_id=membership.org_id,
+            target_app_name=target_app.app_name,
+            target_window_pattern=target_app.window_pattern,
+            target_process_name=target_app.process_name,
+            target_window_class=target_app.window_class,
+            target_app_config=target_app.app_config,
+            target_match_mode=target_app.match_mode or "auto",
+            target_url_pattern=target_app.url_pattern,
+            target_url_patterns=target_app.url_patterns,
+            target_brand_keywords=target_app.brand_keywords,
+            is_configured=target_app.is_configured,
         )
     )
 
@@ -842,26 +880,22 @@ async def clear_target_app_settings(
     """
     Clear target application settings (admin only).
 
-    Removes all target app configuration, disabling targeted window capture.
+    Deactivates the default target app.
+    For multi-app support, use /target-apps endpoints.
     """
+    # Get the default target app
     result = await db.execute(
-        select(Organisation).where(Organisation.org_id == membership.org_id)
-    )
-    organisation = result.scalar_one_or_none()
-
-    if not organisation:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Organisation not found"
+        select(TargetApplication).where(
+            TargetApplication.org_id == membership.org_id,
+            TargetApplication.is_default == True
         )
+    )
+    target_app = result.scalar_one_or_none()
 
-    organisation.target_app_name = None
-    organisation.target_window_pattern = None
-    organisation.target_process_name = None
-    organisation.target_window_class = None
-    organisation.target_app_config = None
-
-    await db.commit()
+    if target_app:
+        # Deactivate instead of delete for data preservation
+        target_app.is_active = False
+        await db.commit()
 
     return {
         "success": True,

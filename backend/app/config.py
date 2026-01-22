@@ -88,16 +88,27 @@ class Settings(BaseSettings):
     YOLO_CONFIDENCE_THRESHOLD: float = 0.5
     YOLO_IOU_THRESHOLD: float = 0.45
 
-    # EasyOCR Settings
+    # OCR Backend Selection: "paddleocr" (fast, recommended) or "easyocr" (fallback)
+    # PaddleOCR is ~200x faster than EasyOCR on CPU
+    OCR_BACKEND: str = "paddleocr"
+
+    # Common OCR Settings
     OCR_LANGUAGE: str = "en"
     OCR_USE_GPU: bool = False
     OCR_CONFIDENCE_THRESHOLD: float = 0.4  # Lowered to detect more text (form labels often low contrast)
 
+    # PaddleOCR Settings (used when OCR_BACKEND="paddleocr")
+    PADDLEOCR_USE_ANGLE_CLS: bool = False  # Disable for speed (only enable for rotated text)
+
     # CV Processing Settings
     CV_MAX_IMAGE_SIZE_MB: int = 10
     CV_SUPPORTED_FORMATS: List[str] = ["png", "jpg", "jpeg", "bmp", "webp"]
-    CV_DEFAULT_RESIZE_WIDTH: int = 1920
-    CV_DEFAULT_RESIZE_HEIGHT: int = 1080
+    CV_DEFAULT_RESIZE_WIDTH: int = 1280  # Higher resolution for better OCR on small text
+    CV_DEFAULT_RESIZE_HEIGHT: int = 720   # 720p for balance of speed and accuracy
+
+    # OpenVINO Settings (for YOLO acceleration)
+    OMNIPARSER_USE_OPENVINO: bool = True  # Export and use OpenVINO model for faster inference
+    OMNIPARSER_OPENVINO_HALF: bool = True  # Use FP16 precision
 
     # =============================================
     # AI Guidance Engine Configuration (Phase 6)

@@ -6,10 +6,11 @@ and extract text, combining them into unified screen state representations.
 
 Components:
 - ImagePreprocessor: Image decoding, validation, and resizing
-- OmniParserDetector: Microsoft OmniParser v2 for UI element detection (recommended)
+- OmniParserDetector: Microsoft OmniParser v2 for UI element detection (recommended, with OpenVINO acceleration)
 - YOLODetector: YOLO v11 based UI element detection (legacy fallback)
-- OCREngine: EasyOCR based text extraction
-- ContextEngine: Fusion layer that combines detection and OCR
+- PaddleOCREngine: PaddleOCR based text extraction (fast, recommended)
+- OCREngine: EasyOCR based text extraction (legacy fallback)
+- ContextEngine: Fusion layer that combines detection and OCR (with parallel processing)
 """
 
 from .data_classes import (
@@ -36,6 +37,11 @@ from .omniparser_detector import (
 from .ocr_engine import (
     OCREngine,
     create_ocr_engine_from_settings
+)
+
+from .paddle_ocr_engine import (
+    PaddleOCREngine,
+    create_paddle_ocr_engine_from_settings
 )
 
 from .context_engine import (
@@ -82,7 +88,9 @@ __all__ = [
     "YOLODetector",
     "create_yolo_detector_from_settings",
     "create_detector_from_settings",
-    # OCR Engine
+    # OCR Engines
+    "PaddleOCREngine",
+    "create_paddle_ocr_engine_from_settings",
     "OCREngine",
     "create_ocr_engine_from_settings",
     # Context Engine

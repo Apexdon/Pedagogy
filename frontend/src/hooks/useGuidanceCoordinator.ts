@@ -40,7 +40,7 @@ export interface UseGuidanceCoordinatorResult {
   error: string | null;
 
   // Actions
-  initialize: (session: GuidanceSession, steps: GuidanceStep[]) => Promise<void>;
+  initialize: (session: GuidanceSession, steps: GuidanceStep[], appId?: string) => Promise<void>;
   start: () => Promise<void>;
   pause: () => void;
   resume: () => void;
@@ -89,10 +89,10 @@ export function useGuidanceCoordinator(
   }, []);
 
   // Initialize coordinator
-  const initialize = useCallback(async (session: GuidanceSession, steps: GuidanceStep[]) => {
+  const initialize = useCallback(async (session: GuidanceSession, steps: GuidanceStep[], appId?: string) => {
     try {
       setError(null);
-      await coordinatorRef.current.initialize(session, steps);
+      await coordinatorRef.current.initialize(session, steps, appId);
       setIsInitialized(true);
       updateState();
     } catch (err) {

@@ -84,10 +84,11 @@ export function GuidancePage() {
   });
 
   // Initialize coordinator when session becomes active
+  // The coordinator will automatically use the org's default target app settings
   useEffect(() => {
     if (hasActiveSession && session && steps.length > 0 && !coordinatorInitialized) {
       initializeCoordinator(session, steps).then(() => {
-        console.log('Coordinator initialized, starting automatic detection');
+        console.log('Coordinator initialized - starting automatic detection');
         startCoordinator().catch(console.error);
       }).catch(console.error);
     }

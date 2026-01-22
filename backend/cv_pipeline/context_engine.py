@@ -1,10 +1,13 @@
 """
 Context Engine - Fusion Layer for CV Pipeline
 
-Combines UI detection (OmniParser or YOLO) and EasyOCR text extraction
-into a unified screen state representation.
+Combines UI detection (OmniParser or YOLO) and OCR text extraction
+(PaddleOCR or EasyOCR) into a unified screen state representation.
+
+Supports parallel processing for improved performance.
 """
 
+import concurrent.futures
 import time
 import uuid
 from datetime import datetime
@@ -73,14 +76,25 @@ class ContextEngine:
         start_time = time.perf_counter()
 
         # Preprocess image
+        preprocess_start = time.perf_counter()
         preprocessed = self.preprocessor.preprocess(base64_image, resize=resize)
+        preprocess_time = (time.perf_counter() - preprocess_start) * 1000
+        print(f"[ContextEngine] Preprocess took {preprocess_time:.0f}ms")
 
-        # Run detection and OCR
-        detection_result = self.detector.detect(preprocessed.image)
-        ocr_result = self.ocr_engine.extract_text(preprocessed.image)
+        # Run detection and OCR in parallel
+        # Note: On older CPUs (like i7-3520M), this is still slow but better than sequential
+        parallel_start = time.perf_counter()
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+            detection_future = executor.submit(self.detector.detect, preprocessed.image)
+            ocr_future = executor.submit(self.ocr_engine.extract_text, preprocessed.image)
 
-        print(f"[ContextEngine] Detection found {len(detection_result.elements)} elements")
-        print(f"[ContextEngine] OCR found {len(ocr_result.text_regions)} text regions")
+            detection_result = detection_future.result()
+            ocr_result = ocr_future.result()
+        parallel_time = (time.perf_counter() - parallel_start) * 1000
+
+        print(f"[ContextEngine] Detection found {len(detection_result.elements)} elements in {detection_result.processing_time_ms:.0f}ms")
+        print(f"[ContextEngine] OCR found {len(ocr_result.text_regions)} text regions in {ocr_result.processing_time_ms:.0f}ms")
+        print(f"[ContextEngine] Parallel processing took {parallel_time:.0f}ms")
 
         # Log sample OCR text
         if ocr_result.text_regions:
@@ -147,9 +161,13 @@ class ContextEngine:
         # Preprocess image
         preprocessed = self.preprocessor.preprocess_from_bytes(image_bytes, resize=resize)
 
-        # Run detection and OCR
-        detection_result = self.detector.detect(preprocessed.image)
-        ocr_result = self.ocr_engine.extract_text(preprocessed.image)
+        # Run detection and OCR in parallel for better performance
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+            detection_future = executor.submit(self.detector.detect, preprocessed.image)
+            ocr_future = executor.submit(self.ocr_engine.extract_text, preprocessed.image)
+
+            detection_result = detection_future.result()
+            ocr_result = ocr_future.result()
 
         # Scale coordinates back to original image size
         elements = self._scale_elements_to_original(
@@ -437,15 +455,18 @@ def create_context_engine_from_settings(settings) -> ContextEngine:
         icon_detect_path = settings.OMNIPARSER_ICON_DETECT_PATH
         if os.path.exists(icon_detect_path):
             from .omniparser_detector import OmniParserDetector
+            use_openvino = getattr(settings, 'OMNIPARSER_USE_OPENVINO', True)
             detector = OmniParserDetector(
                 icon_detect_path=settings.OMNIPARSER_ICON_DETECT_PATH,
                 icon_caption_path=settings.OMNIPARSER_ICON_CAPTION_PATH,
                 confidence_threshold=settings.OMNIPARSER_CONFIDENCE_THRESHOLD,
                 iou_threshold=settings.OMNIPARSER_IOU_THRESHOLD,
                 device="cuda" if settings.OCR_USE_GPU else "cpu",
-                enable_captioning=settings.OMNIPARSER_ENABLE_CAPTIONING
+                enable_captioning=settings.OMNIPARSER_ENABLE_CAPTIONING,
+                use_openvino=use_openvino
             )
-            print(f"Using OmniParser detector from {icon_detect_path}")
+            openvino_status = "with OpenVINO" if use_openvino else "without OpenVINO"
+            print(f"Using OmniParser detector from {icon_detect_path} ({openvino_status})")
         else:
             print(f"OmniParser model not found at {icon_detect_path}, falling back to YOLO")
 
@@ -459,11 +480,24 @@ def create_context_engine_from_settings(settings) -> ContextEngine:
         )
         print(f"Using YOLO detector: {settings.YOLO_MODEL_PATH}")
 
-    ocr_engine = OCREngine(
-        language=settings.OCR_LANGUAGE,
-        use_gpu=settings.OCR_USE_GPU,
-        confidence_threshold=settings.OCR_CONFIDENCE_THRESHOLD
-    )
+    # Select OCR engine based on settings
+    ocr_backend = getattr(settings, 'OCR_BACKEND', 'easyocr')
+    if ocr_backend == "paddleocr":
+        from .paddle_ocr_engine import PaddleOCREngine
+        ocr_engine = PaddleOCREngine(
+            language=settings.OCR_LANGUAGE,
+            use_gpu=settings.OCR_USE_GPU,
+            confidence_threshold=settings.OCR_CONFIDENCE_THRESHOLD,
+            use_angle_cls=getattr(settings, 'PADDLEOCR_USE_ANGLE_CLS', False)
+        )
+        print(f"Using PaddleOCR engine (language: {settings.OCR_LANGUAGE})")
+    else:
+        ocr_engine = OCREngine(
+            language=settings.OCR_LANGUAGE,
+            use_gpu=settings.OCR_USE_GPU,
+            confidence_threshold=settings.OCR_CONFIDENCE_THRESHOLD
+        )
+        print(f"Using EasyOCR engine (language: {settings.OCR_LANGUAGE})")
 
     return ContextEngine(
         preprocessor=preprocessor,

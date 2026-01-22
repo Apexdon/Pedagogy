@@ -16,6 +16,13 @@ import type {
   UpdateTargetAppResponse,
   DetectWindowsResponse,
   ValidatePatternResponse,
+  // Multi-target app types
+  TargetApplication,
+  TargetAppCreateRequest,
+  TargetAppUpdateRequest,
+  TargetAppListResponse,
+  TargetAppDeleteResponse,
+  SetDefaultResponse,
 } from '@/types';
 
 /**
@@ -171,12 +178,18 @@ export const startGuidance = async (sessionId: string): Promise<StartGuidanceRes
  */
 export const captureStep = async (
   sessionId: string,
-  imageBase64?: string
+  imageBase64?: string,
+  options?: {
+    hwnd?: number;  // Window handle for visual verification caching
+    skipVerification?: boolean;  // Skip visual verification if already verified
+  }
 ): Promise<CaptureStepResponse> => {
   // Always send a body object - FastAPI Body() requires consistent format
   const payload = {
     image_base64: imageBase64 || null,
     force_capture: false,
+    hwnd: options?.hwnd || null,
+    skip_verification: options?.skipVerification || false,
   };
   const response = await apiClient.post<CaptureStepResponse>(
     `/guidance/sessions/${sessionId}/capture`,
@@ -230,5 +243,162 @@ export const validateWindowPattern = async (pattern: string): Promise<ValidatePa
   const response = await apiClient.post<ValidatePatternResponse>('/org/validate-pattern', {
     pattern,
   });
+  return response.data;
+};
+
+// =============================================
+// Multi-Target Application API (New)
+// =============================================
+
+/**
+ * List all target applications for the current organisation
+ */
+export const listTargetApps = async (activeOnly = false): Promise<TargetAppListResponse> => {
+  const params = activeOnly ? '?active_only=true' : '';
+  const response = await apiClient.get<TargetAppListResponse>(`/target-apps${params}`);
+  return response.data;
+};
+
+/**
+ * Get a specific target application by ID
+ */
+export const getTargetApp = async (appId: string): Promise<TargetApplication> => {
+  const response = await apiClient.get<TargetApplication>(`/target-apps/${appId}`);
+  return response.data;
+};
+
+/**
+ * Get the default target application for the organisation
+ */
+export const getDefaultTargetApp = async (): Promise<TargetApplication | null> => {
+  const response = await apiClient.get<TargetApplication | null>('/target-apps/default');
+  return response.data;
+};
+
+/**
+ * Create a new target application
+ */
+export const createTargetApp = async (data: TargetAppCreateRequest): Promise<TargetApplication> => {
+  const response = await apiClient.post<TargetApplication>('/target-apps', data);
+  return response.data;
+};
+
+/**
+ * Update an existing target application
+ */
+export const updateTargetApp = async (
+  appId: string,
+  data: TargetAppUpdateRequest
+): Promise<TargetApplication> => {
+  const response = await apiClient.put<TargetApplication>(`/target-apps/${appId}`, data);
+  return response.data;
+};
+
+/**
+ * Delete a target application
+ */
+export const deleteTargetApp = async (appId: string): Promise<TargetAppDeleteResponse> => {
+  const response = await apiClient.delete<TargetAppDeleteResponse>(`/target-apps/${appId}`);
+  return response.data;
+};
+
+/**
+ * Set a target application as the default
+ */
+export const setDefaultTargetApp = async (appId: string): Promise<SetDefaultResponse> => {
+  const response = await apiClient.put<SetDefaultResponse>(`/target-apps/${appId}/default`);
+  return response.data;
+};
+
+/**
+ * Toggle a target application's active status
+ */
+export const toggleTargetAppActive = async (appId: string): Promise<TargetApplication> => {
+  const response = await apiClient.put<TargetApplication>(`/target-apps/${appId}/toggle-active`);
+  return response.data;
+};
+
+// =============================================
+// Fast Visual Verification API
+// =============================================
+
+export interface FastVerifyRequest {
+  image_base64: string;
+  brand_keywords: string[];
+  hwnd?: number | null;
+}
+
+export interface FastVerifyResponse {
+  success: boolean;
+  is_verified: boolean;
+  matched_keywords: string[];
+  confidence: number;
+  verification_time_ms: number;
+  ocr_time_ms: number;
+  total_time_ms: number;
+  hwnd_cached: boolean;
+  message: string;
+}
+
+/**
+ * Fast visual verification using OCR-only (no UI element detection).
+ *
+ * This endpoint is designed for quick target application verification:
+ * - Runs ONLY OCR on the screenshot (skips slow OmniParser detection)
+ * - Checks if brand keywords exist in the OCR text
+ * - Returns within ~5-10 seconds (vs ~85 seconds for full CV analysis)
+ *
+ * Use this for:
+ * - Quick verification before starting full CV analysis
+ * - Continuous monitoring to detect when user navigates away
+ * - Initial window matching before expensive element detection
+ */
+export const fastVerifyTarget = async (request: FastVerifyRequest): Promise<FastVerifyResponse> => {
+  const response = await apiClient.post<FastVerifyResponse>('/guidance/verify-target', request);
+  return response.data;
+};
+
+// =============================================
+// Fast Position Update API (for scroll handling)
+// =============================================
+
+export interface FastPositionUpdateRequest {
+  image_base64: string;
+  target_label: string;
+  current_bbox?: {
+    x1: number;
+    y1: number;
+    x2: number;
+    y2: number;
+  } | null;
+}
+
+export interface FastPositionUpdateResponse {
+  success: boolean;
+  found: boolean;
+  new_bbox?: {
+    x1: number;
+    y1: number;
+    x2: number;
+    y2: number;
+  } | null;
+  confidence: number;
+  ocr_time_ms: number;
+  total_time_ms: number;
+  message: string;
+}
+
+/**
+ * Fast halo position update using OCR-only (for scroll handling).
+ *
+ * This endpoint is designed for quick position updates when user scrolls:
+ * - Runs ONLY OCR on the screenshot (skips slow OmniParser detection)
+ * - Finds the target label text in OCR results
+ * - Returns the new bounding box position
+ *
+ * Much faster than full CV analysis (~5-10 seconds vs ~50 seconds).
+ */
+export const fastPositionUpdate = async (request: FastPositionUpdateRequest): Promise<FastPositionUpdateResponse> => {
+  const response = await apiClient.post<FastPositionUpdateResponse>('/guidance/update-position', request);
   return response.data;
 };

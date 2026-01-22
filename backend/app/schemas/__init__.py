@@ -33,6 +33,15 @@ from app.schemas.guidance import (
     SessionListResponse,
     GuidanceHealthResponse,
 )
+from app.schemas.target_application import (
+    TargetAppCreate,
+    TargetAppUpdate,
+    TargetAppResponse,
+    TargetAppListResponse,
+    TargetAppDeleteResponse,
+    SetDefaultResponse,
+    TargetAppSettingsResponse,
+)
 
 __all__ = [
     "UserRegister",
@@ -59,4 +68,12 @@ __all__ = [
     "SessionStateResponse",
     "SessionListResponse",
     "GuidanceHealthResponse",
+    # Target Applications
+    "TargetAppCreate",
+    "TargetAppUpdate",
+    "TargetAppResponse",
+    "TargetAppListResponse",
+    "TargetAppDeleteResponse",
+    "SetDefaultResponse",
+    "TargetAppSettingsResponse",
 ]

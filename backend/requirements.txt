@@ -3,7 +3,7 @@
 # PEDAGOGY BACKEND DEPENDENCIES
 # =============================================
 
-# FastAPI Framework (latest versions for Python 3.14 compatibility)
+# FastAPI Framework (Python 3.12 recommended for PaddleOCR support)
 fastapi>=0.115.0
 uvicorn[standard]>=0.32.0
 
@@ -58,7 +58,13 @@ ultralytics>=8.0.0
 transformers>=4.36.0
 huggingface-hub>=0.20.0
 
-# EasyOCR Text Extraction
+# OCR Engines
+# PaddleOCR - Fast OCR engine (primary, ~200x faster than EasyOCR)
+# Requires Python 3.8-3.12
+paddlepaddle>=2.6.0
+paddleocr>=2.9.0
+
+# EasyOCR - Fallback OCR engine (kept for compatibility)
 easyocr>=1.7.0
 
 # Image Processing
@@ -72,6 +78,9 @@ torch>=2.0.0
 # Florence-2 Vision-Language Model dependencies
 einops>=0.8.0
 timm>=1.0.0
+
+# OpenVINO - Intel CPU optimization for YOLO inference (3-4x speedup)
+openvino>=2024.0.0
 
 # =============================================
 # PHASE 6: AI GUIDANCE ENGINE - LLM PROVIDERS

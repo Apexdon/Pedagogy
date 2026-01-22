@@ -35,6 +35,10 @@ from app.schemas.guidance import (
     DetectedElement,
     StartGuidanceRequest,
     StartGuidanceResponse,
+    FastVerifyRequest,
+    FastVerifyResponse,
+    FastPositionUpdateRequest,
+    FastPositionUpdateResponse,
 )
 from app.ai_engine import GuidanceGenerator, StepTracker, get_llm_client
 from app.services.knowledge_service import KnowledgeService
@@ -563,6 +567,7 @@ async def start_guidance_session(
     """
     from sqlalchemy import select
     from app.models.organisation import Organisation
+    from app.models.target_application import TargetApplication
     from app.services.window_capture import get_window_capture_service
     from app.services.cv_service import get_cv_service
     from app.ai_engine.matcher import ElementMatcher, TargetSpec, UIElement
@@ -578,7 +583,7 @@ async def start_guidance_session(
             detail="Session not found",
         )
 
-    # Get organisation target app settings
+    # Get organisation
     result = await db.execute(
         select(Organisation).where(Organisation.org_id == membership.org_id)
     )
@@ -590,7 +595,21 @@ async def start_guidance_session(
             detail="Organisation not found",
         )
 
-    target_app_configured = organisation.has_target_app_configured
+    # Check for target application - first try new TargetApplication table, then fall back to legacy org fields
+    target_app_result = await db.execute(
+        select(TargetApplication)
+        .where(TargetApplication.org_id == membership.org_id)
+        .where(TargetApplication.is_active == True)
+        .order_by(TargetApplication.is_default.desc())  # Default app first
+        .limit(1)
+    )
+    target_app = target_app_result.scalar_one_or_none()
+
+    # Determine if target app is configured (new model OR legacy org fields)
+    target_app_configured = (
+        (target_app and target_app.is_configured) or
+        organisation.has_target_app_configured
+    )
 
     if not target_app_configured:
         return StartGuidanceResponse(
@@ -603,14 +622,25 @@ async def start_guidance_session(
             target_window_found=False,
             target_window_title=None,
             current_target=None,
-            message="Target application not configured. Please configure in organisation settings.",
+            message="Target application not configured. Please configure in Target Apps settings.",
         )
+
+    # Get window pattern and process name from target app or legacy org fields
+    window_pattern = (
+        target_app.window_pattern if target_app else None
+    ) or organisation.target_window_pattern
+    process_name = (
+        target_app.process_name if target_app else None
+    ) or organisation.target_process_name
+    app_name = (
+        target_app.app_name if target_app else None
+    ) or organisation.target_app_name
 
     # Find target window
     window_service = get_window_capture_service()
     image_base64, window = window_service.capture_window_by_pattern(
-        pattern=organisation.target_window_pattern,
-        process_name=organisation.target_process_name,
+        pattern=window_pattern,
+        process_name=process_name,
     )
 
     if not window:
@@ -624,7 +654,7 @@ async def start_guidance_session(
             target_window_found=False,
             target_window_title=None,
             current_target=None,
-            message=f"Target window not found. Please open {organisation.target_app_name or 'the target application'}.",
+            message=f"Target window not found. Please open {app_name or 'the target application'}.",
         )
 
     # Analyze captured screen
@@ -726,6 +756,7 @@ async def capture_step(
     """
     from sqlalchemy import select
     from app.models.organisation import Organisation
+    from app.models.target_application import TargetApplication
     from app.services.window_capture import get_window_capture_service
     from app.services.cv_service import get_cv_service
     from app.ai_engine.matcher import ElementMatcher, TargetSpec, UIElement
@@ -756,13 +787,13 @@ async def capture_step(
             detail="No current step found in session",
         )
 
-    # Get organisation target app settings
+    # Get organisation
     result = await db.execute(
         select(Organisation).where(Organisation.org_id == membership.org_id)
     )
     organisation = result.scalar_one_or_none()
 
-    if not organisation or not organisation.has_target_app_configured:
+    if not organisation:
         return CaptureStepResponse(
             success=False,
             session_id=session_id,
@@ -773,7 +804,38 @@ async def capture_step(
             all_elements=[],
             capture_time_ms=0,
             match_confidence=0,
-            message="Target application not configured for this organisation.",
+            message="Organisation not found.",
+            window_title=None,
+        )
+
+    # Check for target application - first try new TargetApplication table, then fall back to legacy org fields
+    target_app_result = await db.execute(
+        select(TargetApplication)
+        .where(TargetApplication.org_id == membership.org_id)
+        .where(TargetApplication.is_active == True)
+        .order_by(TargetApplication.is_default.desc())  # Default app first
+        .limit(1)
+    )
+    target_app = target_app_result.scalar_one_or_none()
+
+    # Determine if target app is configured (new model OR legacy org fields)
+    has_target_configured = (
+        (target_app and target_app.is_configured) or
+        organisation.has_target_app_configured
+    )
+
+    if not has_target_configured:
+        return CaptureStepResponse(
+            success=False,
+            session_id=session_id,
+            step_number=current_step_obj.step_number,
+            instruction=current_step_obj.instruction,
+            target_found=False,
+            target=None,
+            all_elements=[],
+            capture_time_ms=0,
+            match_confidence=0,
+            message="Target application not configured for this organisation. Please configure in Target Apps settings.",
             window_title=None,
         )
 
@@ -791,9 +853,20 @@ async def capture_step(
         logger.info("No frontend screenshot provided, attempting backend window capture")
         window_service = get_window_capture_service()
 
+        # Get window pattern and process name from target app or legacy org fields
+        window_pattern = (
+            target_app.window_pattern if target_app else None
+        ) or organisation.target_window_pattern
+        process_name = (
+            target_app.process_name if target_app else None
+        ) or organisation.target_process_name
+        app_name = (
+            target_app.app_name if target_app else None
+        ) or organisation.target_app_name
+
         image_base64, window = window_service.capture_window_by_pattern(
-            pattern=organisation.target_window_pattern,
-            process_name=organisation.target_process_name,
+            pattern=window_pattern,
+            process_name=process_name,
         )
 
         if window:
@@ -809,7 +882,7 @@ async def capture_step(
                 all_elements=[],
                 capture_time_ms=(time.time() - start_time) * 1000,
                 match_confidence=0,
-                message=f"Target window not found. Please open {organisation.target_app_name or 'the target application'}.",
+                message=f"Target window not found. Please open {app_name or 'the target application'}.",
                 window_title=None,
             )
 
@@ -847,6 +920,65 @@ async def capture_step(
             message=f"Screen analysis failed: {str(e)}",
             window_title=window_title,
         )
+
+    # ==========================================
+    # Visual Verification using Brand Keywords
+    # ==========================================
+    # This verifies we're looking at the target application by checking
+    # for brand keywords in the OCR text. Uses the SAME OCR data already
+    # extracted by CV analysis - no duplicate processing.
+    from app.services.target_verifier import get_target_verifier
+
+    target_verified = True
+    verification_keywords_matched = []
+    hwnd_cached = False
+    hwnd = request.hwnd if request else None
+
+    # Get brand keywords from target app config
+    brand_keywords = []
+    if target_app:
+        brand_keywords = target_app.effective_brand_keywords
+
+    if brand_keywords and not (request and request.skip_verification):
+        verifier = get_target_verifier()
+
+        # Convert screen_state.text_regions to dict format for verifier
+        text_regions_for_verify = [
+            {"text": region.text}
+            for region in screen_state.text_regions
+        ]
+
+        verification_result = verifier.verify_by_keywords(
+            text_regions=text_regions_for_verify,
+            brand_keywords=brand_keywords,
+            hwnd=hwnd,
+        )
+
+        target_verified = verification_result.is_verified
+        verification_keywords_matched = verification_result.matched_keywords
+        hwnd_cached = hwnd is not None and verification_result.is_verified
+
+        if not target_verified:
+            # Not the target application - return early without element matching
+            logger.warning(f"[CAPTURE_STEP] Visual verification failed - not on target app. Looking for: {brand_keywords}")
+            return CaptureStepResponse(
+                success=True,  # Capture succeeded, but wrong app
+                session_id=session_id,
+                step_number=current_step_obj.step_number,
+                instruction=current_step_obj.instruction,
+                target_found=False,
+                target=None,
+                all_elements=[],  # Don't return elements for wrong app
+                capture_time_ms=(time.time() - start_time) * 1000,
+                match_confidence=0,
+                message=f"Please navigate to the target application. Looking for: {', '.join(brand_keywords)}",
+                window_title=window_title,
+                target_verified=False,
+                verification_keywords_matched=[],
+                hwnd_cached=False,
+            )
+
+        logger.info(f"[CAPTURE_STEP] Visual verification passed! Matched keywords: {verification_keywords_matched}")
 
     # Helper function to enrich element labels using nearby OCR text regions
     def enrich_element_labels_from_ocr(elements, text_regions, max_distance=100):
@@ -1062,6 +1194,9 @@ async def capture_step(
             match_confidence=match_result.confidence,
             message=f"Target element found: {match_result.element.label or match_result.element.type}",
             window_title=window_title,
+            target_verified=target_verified,
+            verification_keywords_matched=verification_keywords_matched,
+            hwnd_cached=hwnd_cached,
         )
     else:
         return CaptureStepResponse(
@@ -1076,4 +1211,281 @@ async def capture_step(
             match_confidence=0,
             message=f"Target element not found. {len(all_elements)} elements detected.",
             window_title=window_title,
+            target_verified=target_verified,
+            verification_keywords_matched=verification_keywords_matched,
+            hwnd_cached=hwnd_cached,
+        )
+
+
+# =============================================
+# Fast Visual Verification (OCR-only)
+# =============================================
+
+@router.post("/verify-target", response_model=FastVerifyResponse)
+async def fast_verify_target(
+    request: FastVerifyRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Fast visual verification using OCR-only (no UI element detection).
+
+    This endpoint is designed for quick target application verification:
+    1. Runs ONLY OCR on the screenshot (skips slow OmniParser detection)
+    2. Checks if brand keywords exist in the OCR text
+    3. Returns within ~5-10 seconds (vs ~85 seconds for full CV analysis)
+
+    Use this for:
+    - Quick verification before starting full CV analysis
+    - Continuous monitoring to detect when user navigates away
+    - Initial window matching before expensive element detection
+
+    The full CV analysis (capture_step) should only run AFTER this
+    endpoint confirms the user is on the target application.
+    """
+    import time
+
+    start_time = time.time()
+
+    # Check HWND cache first
+    from app.services.target_verifier import get_target_verifier, get_hwnd_cache
+
+    hwnd_cache = get_hwnd_cache()
+
+    if request.hwnd is not None and hwnd_cache.is_verified(request.hwnd):
+        logger.info(f"[FAST_VERIFY] HWND {request.hwnd} is cached as verified - skipping OCR")
+        return FastVerifyResponse(
+            success=True,
+            is_verified=True,
+            matched_keywords=["(cached)"],
+            confidence=1.0,
+            verification_time_ms=0.0,
+            ocr_time_ms=0.0,
+            total_time_ms=(time.time() - start_time) * 1000,
+            hwnd_cached=True,
+            message="Target verified from HWND cache",
+        )
+
+    if not request.brand_keywords:
+        return FastVerifyResponse(
+            success=True,
+            is_verified=True,  # No keywords = no verification needed
+            matched_keywords=[],
+            confidence=0.0,
+            verification_time_ms=0.0,
+            ocr_time_ms=0.0,
+            total_time_ms=(time.time() - start_time) * 1000,
+            hwnd_cached=False,
+            message="No brand keywords configured - verification skipped",
+        )
+
+    try:
+        # Run OCR-only analysis (skip UI detection)
+        from app.services.cv_service import get_cv_service
+
+        cv_service = get_cv_service()
+        ocr_start = time.time()
+
+        # Use the context engine's extract_text_only method
+        ocr_result = cv_service.context_engine.extract_text_only(
+            request.image_base64,
+            resize=True
+        )
+
+        ocr_time = (time.time() - ocr_start) * 1000
+        logger.info(f"[FAST_VERIFY] OCR completed in {ocr_time:.0f}ms, found {len(ocr_result.text_regions)} text regions")
+
+        # Run keyword verification
+        verifier = get_target_verifier()
+        verify_start = time.time()
+
+        # Convert OCR result to dict format for verifier
+        text_regions_for_verify = [
+            {"text": region.text}
+            for region in ocr_result.text_regions
+        ]
+
+        verification_result = verifier.verify_by_keywords(
+            text_regions=text_regions_for_verify,
+            brand_keywords=request.brand_keywords,
+            hwnd=request.hwnd,
+        )
+
+        verify_time = (time.time() - verify_start) * 1000
+        total_time = (time.time() - start_time) * 1000
+
+        if verification_result.is_verified:
+            logger.info(
+                f"[FAST_VERIFY] Target VERIFIED in {total_time:.0f}ms. "
+                f"Matched: {verification_result.matched_keywords}"
+            )
+            message = f"Target verified! Matched keywords: {', '.join(verification_result.matched_keywords)}"
+        else:
+            logger.info(
+                f"[FAST_VERIFY] Target NOT verified in {total_time:.0f}ms. "
+                f"Looking for: {request.brand_keywords}"
+            )
+            message = f"Target not verified. Looking for: {', '.join(request.brand_keywords)}"
+
+        return FastVerifyResponse(
+            success=True,
+            is_verified=verification_result.is_verified,
+            matched_keywords=verification_result.matched_keywords,
+            confidence=verification_result.confidence,
+            verification_time_ms=verify_time,
+            ocr_time_ms=ocr_time,
+            total_time_ms=total_time,
+            hwnd_cached=request.hwnd is not None and verification_result.is_verified,
+            message=message,
+        )
+
+    except Exception as e:
+        logger.error(f"[FAST_VERIFY] Error during verification: {e}")
+        return FastVerifyResponse(
+            success=False,
+            is_verified=False,
+            matched_keywords=[],
+            confidence=0.0,
+            verification_time_ms=0.0,
+            ocr_time_ms=0.0,
+            total_time_ms=(time.time() - start_time) * 1000,
+            hwnd_cached=False,
+            message=f"Verification failed: {str(e)}",
+        )
+
+
+# =============================================
+# Fast Position Update (OCR-only, for scroll)
+# =============================================
+
+@router.post("/update-position", response_model=FastPositionUpdateResponse)
+async def fast_position_update(
+    request: FastPositionUpdateRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Fast halo position update using OCR-only (for scroll handling).
+
+    This endpoint is designed for quick position updates when user scrolls:
+    1. Runs ONLY OCR on the screenshot (skips slow OmniParser detection)
+    2. Finds the target label text in OCR results
+    3. Returns the new bounding box position
+
+    Much faster than full CV analysis (~5-10 seconds vs ~50 seconds).
+    Use this for scroll updates, use full CV only for step changes.
+    """
+    import time
+    from difflib import SequenceMatcher
+
+    start_time = time.time()
+
+    if not request.target_label:
+        return FastPositionUpdateResponse(
+            success=False,
+            found=False,
+            new_bbox=None,
+            confidence=0.0,
+            ocr_time_ms=0.0,
+            total_time_ms=(time.time() - start_time) * 1000,
+            message="No target label provided",
+        )
+
+    try:
+        # Run OCR-only analysis
+        from app.services.cv_service import get_cv_service
+
+        cv_service = get_cv_service()
+        ocr_start = time.time()
+
+        ocr_result = cv_service.context_engine.extract_text_only(
+            request.image_base64,
+            resize=True
+        )
+
+        ocr_time = (time.time() - ocr_start) * 1000
+        logger.info(f"[FAST_POSITION] OCR completed in {ocr_time:.0f}ms, found {len(ocr_result.text_regions)} text regions")
+
+        # Find the target label in OCR results
+        target_label_lower = request.target_label.lower().strip()
+        best_match = None
+        best_score = 0.0
+
+        for region in ocr_result.text_regions:
+            region_text_lower = region.text.lower().strip()
+
+            # Exact match
+            if target_label_lower in region_text_lower or region_text_lower in target_label_lower:
+                score = 1.0 if target_label_lower == region_text_lower else 0.9
+            else:
+                # Fuzzy match
+                score = SequenceMatcher(None, target_label_lower, region_text_lower).ratio()
+
+            # If we have a current bbox, prefer matches near it (for scroll handling)
+            if request.current_bbox and score > 0.5:
+                # Calculate distance from current position
+                region_center_x = (region.bbox[0] + region.bbox[2]) / 2
+                region_center_y = (region.bbox[1] + region.bbox[3]) / 2
+                current_center_x = (request.current_bbox.x1 + request.current_bbox.x2) / 2
+                current_center_y = (request.current_bbox.y1 + request.current_bbox.y2) / 2
+
+                # Horizontal distance matters more (scroll is vertical)
+                h_dist = abs(region_center_x - current_center_x)
+                v_dist = abs(region_center_y - current_center_y)
+
+                # Prefer matches that are horizontally close (same column)
+                if h_dist < 100:  # Within 100 pixels horizontally
+                    score += 0.2
+                elif h_dist < 200:
+                    score += 0.1
+
+            if score > best_score:
+                best_score = score
+                best_match = region
+
+        if best_match and best_score >= 0.6:
+            new_bbox = BoundingBox(
+                x1=int(best_match.bbox[0]),
+                y1=int(best_match.bbox[1]),
+                x2=int(best_match.bbox[2]),
+                y2=int(best_match.bbox[3]),
+            )
+
+            total_time = (time.time() - start_time) * 1000
+            logger.info(
+                f"[FAST_POSITION] Found '{request.target_label}' at ({new_bbox.x1}, {new_bbox.y1}) "
+                f"with confidence {best_score:.2f} in {total_time:.0f}ms"
+            )
+
+            return FastPositionUpdateResponse(
+                success=True,
+                found=True,
+                new_bbox=new_bbox,
+                confidence=best_score,
+                ocr_time_ms=ocr_time,
+                total_time_ms=total_time,
+                message=f"Found target at new position",
+            )
+        else:
+            total_time = (time.time() - start_time) * 1000
+            logger.info(f"[FAST_POSITION] Target '{request.target_label}' not found in {total_time:.0f}ms")
+
+            return FastPositionUpdateResponse(
+                success=True,
+                found=False,
+                new_bbox=None,
+                confidence=best_score,
+                ocr_time_ms=ocr_time,
+                total_time_ms=total_time,
+                message=f"Target not found (best match score: {best_score:.2f})",
+            )
+
+    except Exception as e:
+        logger.error(f"[FAST_POSITION] Error: {e}")
+        return FastPositionUpdateResponse(
+            success=False,
+            found=False,
+            new_bbox=None,
+            confidence=0.0,
+            ocr_time_ms=0.0,
+            total_time_ms=(time.time() - start_time) * 1000,
+            message=f"Position update failed: {str(e)}",
         )
