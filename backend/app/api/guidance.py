@@ -482,6 +482,25 @@ async def abandon_session(
     return {"success": True, "message": "Session abandoned"}
 
 
+@router.delete("/sessions/{session_id}")
+async def delete_session(
+    session_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Delete a guidance session and all related data."""
+    tracker = StepTracker(db)
+    success = await tracker.delete_session(session_id, current_user.user_id)
+
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Session not found",
+        )
+
+    return {"success": True, "message": "Session deleted"}
+
+
 # =============================================
 # Health Check
 # =============================================

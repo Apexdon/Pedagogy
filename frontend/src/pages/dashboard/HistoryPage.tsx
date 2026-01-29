@@ -6,8 +6,8 @@
 
 import { useState, useEffect } from 'react';
 import { Card, CardBody, Button, Loading } from '@/components/ui';
-import { listGuidanceSessions, resumeSession } from '@/api/guidance';
-import { useGuidanceStore } from '@/stores';
+import { listGuidanceSessions, resumeSession, deleteSession } from '@/api/guidance';
+import { useGuidanceStore, useUIStore } from '@/stores';
 import { useNavigate } from 'react-router-dom';
 import type { GuidanceSession } from '@/types';
 
@@ -26,8 +26,10 @@ export function HistoryPage() {
   const [error, setError] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<string>('');
   const [resumingId, setResumingId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const guidanceStore = useGuidanceStore();
+  const { addToast } = useUIStore();
 
   // Fetch sessions
   useEffect(() => {
@@ -63,6 +65,25 @@ export function HistoryPage() {
       setError('Failed to resume session');
     } finally {
       setResumingId(null);
+    }
+  };
+
+  const handleDeleteSession = async (session: GuidanceSession) => {
+    if (!confirm(`Are you sure you want to delete this session?\n\n"${session.query}"\n\nThis action cannot be undone.`)) {
+      return;
+    }
+
+    setDeletingId(session.session_id);
+    try {
+      await deleteSession(session.session_id);
+      // Remove from local state
+      setSessions((prev) => prev.filter((s) => s.session_id !== session.session_id));
+      addToast({ type: 'success', message: 'Session deleted successfully' });
+    } catch (err) {
+      console.error('Failed to delete session:', err);
+      addToast({ type: 'error', message: 'Failed to delete session' });
+    } finally {
+      setDeletingId(null);
     }
   };
 
@@ -200,7 +221,7 @@ export function HistoryPage() {
                       </div>
 
                       {/* Actions */}
-                      <div className="flex-shrink-0">
+                      <div className="flex-shrink-0 flex items-center gap-2">
                         {canResume && (
                           <Button
                             size="sm"
@@ -219,6 +240,21 @@ export function HistoryPage() {
                             Completed
                           </span>
                         )}
+                        {/* Delete Button */}
+                        <button
+                          onClick={() => handleDeleteSession(session)}
+                          disabled={deletingId === session.session_id}
+                          className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors disabled:opacity-50"
+                          title="Delete session"
+                        >
+                          {deletingId === session.session_id ? (
+                            <Loading size="sm" />
+                          ) : (
+                            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                            </svg>
+                          )}
+                        </button>
                       </div>
                     </div>
 

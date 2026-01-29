@@ -456,6 +456,36 @@ class StepTracker:
         await self.db.commit()
         return True
 
+    async def delete_session(self, session_id: str, user_id: str) -> bool:
+        """
+        Delete a session and all related data.
+
+        Args:
+            session_id: Session ID to delete
+            user_id: User ID for authorization
+
+        Returns:
+            True if deleted successfully
+        """
+        session = await self.get_session(session_id, user_id)
+        if not session:
+            return False
+
+        # Delete captures first (foreign key constraint)
+        for capture in session.captures:
+            await self.db.delete(capture)
+
+        # Delete steps
+        for step in session.steps:
+            await self.db.delete(step)
+
+        # Delete session
+        await self.db.delete(session)
+        await self.db.commit()
+
+        logger.info(f"Deleted session {session_id}")
+        return True
+
     async def list_sessions(
         self,
         user_id: str,

@@ -56,11 +56,12 @@ interface PublicOnlyRouteProps {
 }
 
 export function PublicOnlyRoute({ children }: PublicOnlyRouteProps) {
-  const { isAuthenticated } = useAuthStore();
+  const { isAuthenticated, role } = useAuthStore();
 
-  // If already authenticated with org, redirect to dashboard
+  // If already authenticated with org, redirect based on role
   if (isAuthenticated) {
-    return <Navigate to="/dashboard" replace />;
+    const isOrgAdmin = role === 'org_admin' || role === 'manager';
+    return <Navigate to={isOrgAdmin ? '/org/dashboard' : '/dashboard'} replace />;
   }
 
   return <>{children}</>;

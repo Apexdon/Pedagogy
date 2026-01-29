@@ -147,6 +147,16 @@ export const abandonSession = async (sessionId: string): Promise<{ success: bool
 };
 
 /**
+ * Delete a guidance session and all related data
+ */
+export const deleteSession = async (sessionId: string): Promise<{ success: boolean }> => {
+  const response = await apiClient.delete<{ success: boolean }>(
+    `/guidance/sessions/${sessionId}`
+  );
+  return response.data;
+};
+
+/**
  * Check guidance engine health
  */
 export const checkGuidanceHealth = async (): Promise<GuidanceHealthResponse> => {

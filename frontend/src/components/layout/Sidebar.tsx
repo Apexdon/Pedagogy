@@ -65,20 +65,6 @@ const userNavItems = [
       </svg>
     ),
   },
-  {
-    name: 'Detection Test',
-    path: '/detection-test',
-    icon: (
-      <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-        <path
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          strokeWidth={2}
-          d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"
-        />
-      </svg>
-    ),
-  },
 ];
 
 // Org admin navigation items (only for org_admin and manager roles)
@@ -167,7 +153,7 @@ export function Sidebar() {
   if (!isSidebarOpen) return null;
 
   return (
-    <aside className="w-64 bg-white border-r border-gray-200 min-h-screen">
+    <aside className="w-64 bg-white border-r border-gray-200 h-screen sticky top-0 flex-shrink-0 overflow-y-auto">
       <div className="p-4">
         {/* Logo */}
         <div className="flex items-center gap-3 mb-8">

@@ -62,7 +62,10 @@ export function SelectOrgPage() {
         type: 'success',
         message: `Welcome to ${response.organisation.org_name}!`,
       });
-      navigate('/dashboard');
+
+      // Redirect based on role
+      const isOrgAdmin = response.role === 'org_admin' || response.role === 'manager';
+      navigate(isOrgAdmin ? '/org/dashboard' : '/dashboard');
     } catch (error) {
       const axiosError = error as AxiosError<HttpErrorResponse>;
       const message = axiosError.response?.data?.detail || 'Failed to select organisation';

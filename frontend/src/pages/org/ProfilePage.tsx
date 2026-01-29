@@ -2,12 +2,7 @@ import { useEffect, useState } from 'react';
 import { Card, CardBody, CardHeader, Button, Input, Loading } from '@/components/ui';
 import { useAuthStore, useUIStore } from '@/stores';
 import { getOrganisationProfile, updateOrganisationProfile } from '@/api';
-import {
-  getTargetAppSettings,
-  updateTargetAppSettings,
-  clearTargetAppSettings,
-} from '@/api/guidance';
-import type { OrganisationProfile, TargetAppSettings } from '@/types';
+import type { OrganisationProfile } from '@/types';
 import type { AxiosError } from 'axios';
 import type { HttpErrorResponse } from '@/types';
 
@@ -24,21 +19,6 @@ export function ProfilePage() {
     org_name: '',
     primary_color: '',
   });
-
-  // Target app settings state
-  const [targetAppSettings, setTargetAppSettings] = useState<TargetAppSettings | null>(null);
-  const [loadingTargetSettings, setLoadingTargetSettings] = useState(false);
-  const [savingTargetSettings, setSavingTargetSettings] = useState(false);
-  const [targetSettingsError, setTargetSettingsError] = useState<string | null>(null);
-  const [targetSettingsSuccess, setTargetSettingsSuccess] = useState<string | null>(null);
-
-  // Form state for target app
-  const [targetAppName, setTargetAppName] = useState('');
-  const [windowPattern, setWindowPattern] = useState('');
-  const [processName, setProcessName] = useState('');
-  // Smart matching fields
-  const [matchMode, setMatchMode] = useState<'url' | 'process' | 'title' | 'auto'>('auto');
-  const [urlPattern, setUrlPattern] = useState('');
 
   const isAdmin = role === 'org_admin';
 
@@ -106,86 +86,6 @@ export function ProfilePage() {
       });
     }
     setIsEditing(false);
-  };
-
-  // Load target app settings on mount
-  useEffect(() => {
-    if (isAdmin) {
-      loadTargetAppSettings();
-    }
-  }, [isAdmin]);
-
-  const loadTargetAppSettings = async () => {
-    try {
-      setLoadingTargetSettings(true);
-      setTargetSettingsError(null);
-      const settings = await getTargetAppSettings();
-      setTargetAppSettings(settings);
-      setTargetAppName(settings.target_app_name || '');
-      setWindowPattern(settings.target_window_pattern || '');
-      setProcessName(settings.target_process_name || '');
-      // Smart matching fields
-      setMatchMode(settings.target_match_mode || 'auto');
-      setUrlPattern(settings.target_url_pattern || '');
-    } catch (error) {
-      console.error('Failed to load target app settings:', error);
-      setTargetSettingsError('Failed to load target application settings');
-    } finally {
-      setLoadingTargetSettings(false);
-    }
-  };
-
-  const handleSaveTargetApp = async () => {
-    try {
-      setSavingTargetSettings(true);
-      setTargetSettingsError(null);
-      setTargetSettingsSuccess(null);
-
-      await updateTargetAppSettings({
-        target_app_name: targetAppName || undefined,
-        target_window_pattern: windowPattern || undefined,
-        target_process_name: processName || undefined,
-        // Smart matching fields
-        target_match_mode: matchMode,
-        target_url_pattern: urlPattern || undefined,
-      });
-
-      setTargetSettingsSuccess('Target application settings saved successfully');
-      await loadTargetAppSettings();
-
-      // Clear success message after 3 seconds
-      setTimeout(() => setTargetSettingsSuccess(null), 3000);
-    } catch (error) {
-      console.error('Failed to save target app settings:', error);
-      setTargetSettingsError('Failed to save target application settings');
-    } finally {
-      setSavingTargetSettings(false);
-    }
-  };
-
-  const handleClearTargetApp = async () => {
-    if (!confirm('Are you sure you want to clear the target application settings?')) {
-      return;
-    }
-
-    try {
-      setSavingTargetSettings(true);
-      setTargetSettingsError(null);
-      await clearTargetAppSettings();
-      setTargetAppName('');
-      setWindowPattern('');
-      setProcessName('');
-      setMatchMode('auto');
-      setUrlPattern('');
-      setTargetAppSettings(null);
-      setTargetSettingsSuccess('Target application settings cleared');
-      setTimeout(() => setTargetSettingsSuccess(null), 3000);
-    } catch (error) {
-      console.error('Failed to clear target app settings:', error);
-      setTargetSettingsError('Failed to clear target application settings');
-    } finally {
-      setSavingTargetSettings(false);
-    }
   };
 
   if (isLoading) {
@@ -325,159 +225,6 @@ export function ProfilePage() {
           </div>
         </CardBody>
       </Card>
-
-      {/* Target Application Settings (Admin only) */}
-      {isAdmin && (
-        <Card>
-          <CardHeader>
-            <div className="flex items-center justify-between">
-              <div>
-                <h2 className="text-lg font-semibold text-gray-900">Target Application</h2>
-                <p className="text-sm text-gray-500 mt-1">
-                  Configure which application or website users should be on when receiving AI guidance.
-                  Screen capture and element detection will only occur when users are on the target application.
-                </p>
-              </div>
-              {targetAppSettings?.is_configured && (
-                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                  Configured
-                </span>
-              )}
-            </div>
-          </CardHeader>
-          <CardBody>
-            {loadingTargetSettings ? (
-              <div className="flex items-center justify-center py-8">
-                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600"></div>
-              </div>
-            ) : (
-              <div className="space-y-6">
-                {/* Error/Success messages */}
-                {targetSettingsError && (
-                  <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg">
-                    {targetSettingsError}
-                  </div>
-                )}
-                {targetSettingsSuccess && (
-                  <div className="bg-green-50 border border-green-200 text-green-700 px-4 py-3 rounded-lg">
-                    {targetSettingsSuccess}
-                  </div>
-                )}
-
-                {/* Form Fields */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Application Name
-                  </label>
-                  <Input
-                    type="text"
-                    value={targetAppName}
-                    onChange={(e) => setTargetAppName(e.target.value)}
-                    placeholder="e.g., RS Components, Salesforce, Microsoft Excel"
-                  />
-                  <p className="text-xs text-gray-500 mt-1">
-                    A friendly name for the target application that users will see
-                  </p>
-                </div>
-
-                {/* Match Mode Selection */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Matching Strategy
-                  </label>
-                  <select
-                    value={matchMode}
-                    onChange={(e) => setMatchMode(e.target.value as 'url' | 'process' | 'title' | 'auto')}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
-                  >
-                    <option value="auto">Auto (Recommended) - Tries URL, then process, then title</option>
-                    <option value="url">URL - Match by browser URL (best for websites)</option>
-                    <option value="process">Process - Match by process name (best for desktop apps)</option>
-                    <option value="title">Title - Match by window title (legacy)</option>
-                  </select>
-                  <p className="text-xs text-gray-500 mt-1">
-                    Choose how Pedagogy identifies when users are on the target application
-                  </p>
-                </div>
-
-                {/* URL Pattern - Show when mode is URL or Auto */}
-                {(matchMode === 'url' || matchMode === 'auto') && (
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      URL Pattern {matchMode === 'url' && <span className="text-red-500">*</span>}
-                    </label>
-                    <Input
-                      type="text"
-                      value={urlPattern}
-                      onChange={(e) => setUrlPattern(e.target.value)}
-                      placeholder="e.g., rs-online.com, salesforce.com, *.google.com"
-                    />
-                    <p className="text-xs text-gray-500 mt-1">
-                      Domain pattern for websites. Use wildcards like *.salesforce.com to match subdomains.
-                      The browser URL is extracted automatically when users navigate.
-                    </p>
-                  </div>
-                )}
-
-                {/* Process Name - Show when mode is Process or Auto */}
-                {(matchMode === 'process' || matchMode === 'auto') && (
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Process Name {matchMode === 'process' && <span className="text-red-500">*</span>}
-                    </label>
-                    <Input
-                      type="text"
-                      value={processName}
-                      onChange={(e) => setProcessName(e.target.value)}
-                      placeholder="e.g., chrome.exe, EXCEL.EXE, Code.exe"
-                    />
-                    <p className="text-xs text-gray-500 mt-1">
-                      The executable name of the application (for desktop apps).
-                    </p>
-                  </div>
-                )}
-
-                {/* Window Title Pattern - Show when mode is Title or Auto */}
-                {(matchMode === 'title' || matchMode === 'auto') && (
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Window Title Pattern {matchMode === 'title' && <span className="text-red-500">*</span>}
-                    </label>
-                    <Input
-                      type="text"
-                      value={windowPattern}
-                      onChange={(e) => setWindowPattern(e.target.value)}
-                      placeholder="e.g., *Salesforce*, *Excel*, *Visual Studio Code*"
-                    />
-                    <p className="text-xs text-gray-500 mt-1">
-                      Use wildcards (*) to match window titles. This is a fallback method that may not work reliably when users navigate between pages.
-                    </p>
-                  </div>
-                )}
-
-                {/* Save/Clear buttons */}
-                <div className="flex gap-3 pt-4 border-t border-gray-200">
-                  <Button
-                    onClick={handleSaveTargetApp}
-                    disabled={savingTargetSettings || !targetAppName || (matchMode === 'url' && !urlPattern) || (matchMode === 'process' && !processName) || (matchMode === 'title' && !windowPattern)}
-                  >
-                    {savingTargetSettings ? 'Saving...' : 'Save Settings'}
-                  </Button>
-                  {targetAppSettings?.is_configured && (
-                    <Button
-                      onClick={handleClearTargetApp}
-                      variant="secondary"
-                      disabled={savingTargetSettings}
-                    >
-                      Clear Settings
-                    </Button>
-                  )}
-                </div>
-              </div>
-            )}
-          </CardBody>
-        </Card>
-      )}
 
       {/* Edit actions */}
       {isEditing && (
