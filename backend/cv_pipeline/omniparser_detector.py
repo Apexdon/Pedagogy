@@ -43,7 +43,7 @@ def _get_icon_detect_model(model_path: str, use_openvino: bool = True):
         from ultralytics import YOLO
 
         if use_openvino:
-            # Check if OpenVINO model already exists
+            # Use FP16 OpenVINO model (INT8 requires calibration dataset)
             openvino_dir = model_path.replace('.pt', '_openvino_model')
 
             if os.path.isdir(openvino_dir):
@@ -51,16 +51,20 @@ def _get_icon_detect_model(model_path: str, use_openvino: bool = True):
                 print(f"[OmniParser] Loading OpenVINO model from {openvino_dir}")
                 _icon_detect_model = YOLO(openvino_dir)
             else:
-                # Export to OpenVINO format (one-time operation)
+                # Export to OpenVINO FP16 format (one-time operation)
                 print(f"[OmniParser] Exporting {model_path} to OpenVINO format...")
                 try:
                     pt_model = YOLO(model_path)
                     pt_model.export(format='openvino', half=True)
-                    print(f"[OmniParser] OpenVINO export complete, loading from {openvino_dir}")
+                    print(f"[OmniParser] OpenVINO export complete")
                     _icon_detect_model = YOLO(openvino_dir)
                 except Exception as e:
-                    print(f"[OmniParser] OpenVINO export failed: {e}, falling back to PyTorch")
+                    print(f"[OmniParser] OpenVINO export failed: {e}")
+                    print(f"[OmniParser] Falling back to PyTorch model")
                     _icon_detect_model = YOLO(model_path)
+
+            # Note: Warmup disabled - causes [Errno 22] on some systems
+            # The first real inference will include warmup overhead
         else:
             _icon_detect_model = YOLO(model_path)
 

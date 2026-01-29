@@ -74,11 +74,13 @@ class ContextEngine:
             Complete ScreenState with elements and text
         """
         start_time = time.perf_counter()
+        timing_breakdown = {}
 
         # Preprocess image
         preprocess_start = time.perf_counter()
         preprocessed = self.preprocessor.preprocess(base64_image, resize=resize)
         preprocess_time = (time.perf_counter() - preprocess_start) * 1000
+        timing_breakdown['preprocess'] = preprocess_time
         print(f"[ContextEngine] Preprocess took {preprocess_time:.0f}ms")
 
         # Run detection and OCR in parallel
@@ -91,6 +93,9 @@ class ContextEngine:
             detection_result = detection_future.result()
             ocr_result = ocr_future.result()
         parallel_time = (time.perf_counter() - parallel_start) * 1000
+        timing_breakdown['detection'] = detection_result.processing_time_ms
+        timing_breakdown['ocr'] = ocr_result.processing_time_ms
+        timing_breakdown['parallel_total'] = parallel_time
 
         print(f"[ContextEngine] Detection found {len(detection_result.elements)} elements in {detection_result.processing_time_ms:.0f}ms")
         print(f"[ContextEngine] OCR found {len(ocr_result.text_regions)} text regions in {ocr_result.processing_time_ms:.0f}ms")
@@ -102,6 +107,7 @@ class ContextEngine:
             print(f"[ContextEngine] Sample OCR texts: {sample_texts}")
 
         # Scale coordinates back to original image size
+        scale_start = time.perf_counter()
         elements = self._scale_elements_to_original(
             detection_result.elements,
             preprocessed.scale_factor
@@ -110,16 +116,25 @@ class ContextEngine:
             ocr_result.text_regions,
             preprocessed.scale_factor
         )
+        scale_time = (time.perf_counter() - scale_start) * 1000
+        timing_breakdown['scaling'] = scale_time
 
         # Fuse text labels with UI elements
+        fusion_start = time.perf_counter()
         if fuse_labels:
             elements = self._fuse_labels_with_elements(elements, text_regions)
 
             # Count elements with labels after fusion
             labeled_count = sum(1 for e in elements if e.label)
             print(f"[ContextEngine] After fusion: {labeled_count}/{len(elements)} elements have labels")
+        fusion_time = (time.perf_counter() - fusion_start) * 1000
+        timing_breakdown['fusion'] = fusion_time
 
         total_time = (time.perf_counter() - start_time) * 1000
+        timing_breakdown['total'] = total_time
+
+        # Print detailed timing summary
+        self._print_timing_summary(timing_breakdown, detection_result, ocr_result)
 
         return ScreenState(
             capture_id=str(uuid.uuid4()),
@@ -248,6 +263,79 @@ class ContextEngine:
         """
         preprocessed = self.preprocessor.preprocess(base64_image, resize=resize)
         result = self.ocr_engine.extract_text(preprocessed.image)
+
+        # Scale coordinates back to original
+        scaled_regions = self._scale_text_regions_to_original(
+            result.text_regions,
+            preprocessed.scale_factor
+        )
+
+        return OCRResult(
+            text_regions=scaled_regions,
+            processing_time_ms=result.processing_time_ms,
+            language=result.language
+        )
+
+    def extract_text_fast(
+        self,
+        base64_image: str,
+        resize: bool = True,
+        max_width: int = 480,
+        max_height: int = 270,
+        use_header_roi: bool = False,
+        header_roi_height: int = 250,
+    ) -> OCRResult:
+        """
+        Fast OCR text extraction using RapidOCR, Windows OCR, or Tesseract.
+
+        Performance optimizations:
+        - RapidOCR (~200-400ms) - Default, 30-50% faster than Tesseract
+        - Windows OCR (~50-200ms) - Fastest on Windows 10+
+        - Header ROI (~60-70% faster) - Only OCR top portion where brand text is
+
+        Use this for target verification (brand keyword matching) where speed
+        is more important than accuracy.
+
+        Args:
+            base64_image: Base64 encoded image string
+            resize: Whether to resize large images
+            max_width: Maximum width for fast OCR
+            max_height: Maximum height for fast OCR
+            use_header_roi: If True, only OCR top portion (header area)
+            header_roi_height: Height of header region to OCR (default 250px)
+
+        Returns:
+            OCRResult with text regions
+        """
+        from .fast_ocr_engine import get_fast_ocr_engine
+        from app.config import settings
+
+        start_time = time.perf_counter()
+
+        # Get or create fast OCR engine (lazy loaded)
+        fast_engine = get_fast_ocr_engine(settings)
+
+        # Preprocess image
+        preprocessed = self.preprocessor.preprocess(
+            base64_image,
+            resize=resize,
+            max_width=max_width,
+            max_height=max_height
+        )
+        preprocess_time = (time.perf_counter() - start_time) * 1000
+        print(f"[FastOCR] Preprocess: {preprocess_time:.0f}ms, size: {preprocessed.processed_size}")
+
+        # Run fast OCR (with optional header-only ROI)
+        result = fast_engine.extract_text(
+            preprocessed.image,
+            use_roi=use_header_roi,
+            roi_height=header_roi_height,
+        )
+        engine_info = fast_engine.get_engine_info()
+        print(
+            f"[FastOCR] {engine_info['backend']}: {result.processing_time_ms:.0f}ms, "
+            f"regions: {len(result.text_regions)}, ROI: {use_header_roi}"
+        )
 
         # Scale coordinates back to original
         scaled_regions = self._scale_text_regions_to_original(
@@ -400,6 +488,53 @@ class ContextEngine:
 
         return 0.0
 
+    def _print_timing_summary(
+        self,
+        timing: dict,
+        detection_result: DetectionResult,
+        ocr_result: OCRResult
+    ) -> None:
+        """Print a detailed timing summary box for debugging."""
+        import sys
+
+        # Get OCR backend name from engine info
+        ocr_backend = "OCR"
+        if hasattr(self, 'ocr_engine') and hasattr(self.ocr_engine, 'get_engine_info'):
+            engine_info = self.ocr_engine.get_engine_info()
+            ocr_backend = engine_info.get('engine', 'OCR')
+
+        lines = [
+            "",
+            "=" * 70,
+            "                    CV ANALYSIS TIMING BREAKDOWN",
+            "=" * 70,
+            f"  {'Component':<25} {'Time (ms)':<15} {'Details'}",
+            "-" * 70,
+            f"  {'Preprocessing':<25} {timing.get('preprocess', 0):>10.0f}ms",
+            f"  {'Detection (OmniParser)':<25} {timing.get('detection', 0):>10.0f}ms    ({len(detection_result.elements)} elements)",
+            f"  {f'OCR ({ocr_backend})':<25} {timing.get('ocr', 0):>10.0f}ms    ({len(ocr_result.text_regions)} text regions)",
+            f"  {'Parallel Wall Time':<25} {timing.get('parallel_total', 0):>10.0f}ms",
+            f"  {'Coordinate Scaling':<25} {timing.get('scaling', 0):>10.0f}ms",
+            f"  {'Label Fusion':<25} {timing.get('fusion', 0):>10.0f}ms",
+            "-" * 70,
+            f"  {'TOTAL':<25} {timing.get('total', 0):>10.0f}ms",
+            "=" * 70,
+        ]
+
+        # Highlight the bottleneck
+        detection_time = timing.get('detection', 0)
+        ocr_time = timing.get('ocr', 0)
+        if detection_time > ocr_time:
+            lines.append(f"  BOTTLENECK: Detection ({detection_time:.0f}ms) - {detection_time/timing.get('total', 1)*100:.1f}% of total")
+        else:
+            lines.append(f"  BOTTLENECK: OCR ({ocr_time:.0f}ms) - {ocr_time/timing.get('total', 1)*100:.1f}% of total")
+        lines.append("=" * 70)
+        lines.append("")
+
+        # Print all at once and flush
+        print("\n".join(lines), flush=True)
+        sys.stdout.flush()
+
     def get_health_status(self) -> dict:
         """
         Get health status of all CV components.
@@ -481,23 +616,113 @@ def create_context_engine_from_settings(settings) -> ContextEngine:
         print(f"Using YOLO detector: {settings.YOLO_MODEL_PATH}")
 
     # Select OCR engine based on settings
-    ocr_backend = getattr(settings, 'OCR_BACKEND', 'easyocr')
+    # Note: Surya OCR is extremely slow on CPU (~8-15 min), only use with GPU
+    ocr_backend = getattr(settings, 'OCR_BACKEND', 'paddleocr')
+    ocr_engine = None
+    debug_timing = getattr(settings, 'CV_DEBUG_TIMING', False)
+
+    print(f"\n[ContextEngine] Initializing OCR engine: {ocr_backend}")
+
+    # Try PaddleOCR first if explicitly requested (accurate, ~5-10s on CPU)
     if ocr_backend == "paddleocr":
-        from .paddle_ocr_engine import PaddleOCREngine
-        ocr_engine = PaddleOCREngine(
-            language=settings.OCR_LANGUAGE,
-            use_gpu=settings.OCR_USE_GPU,
-            confidence_threshold=settings.OCR_CONFIDENCE_THRESHOLD,
-            use_angle_cls=getattr(settings, 'PADDLEOCR_USE_ANGLE_CLS', False)
-        )
-        print(f"Using PaddleOCR engine (language: {settings.OCR_LANGUAGE})")
-    else:
+        # Check if OpenVINO acceleration is enabled (default: True for faster inference)
+        use_openvino = getattr(settings, 'PADDLEOCR_USE_OPENVINO', True)
+
+        if use_openvino:
+            try:
+                from .openvino_ocr_engine import OpenVINOOCREngine
+                openvino_device = getattr(settings, 'PADDLEOCR_OPENVINO_DEVICE', 'CPU')
+                ocr_engine = OpenVINOOCREngine(
+                    language=settings.OCR_LANGUAGE,
+                    confidence_threshold=settings.OCR_CONFIDENCE_THRESHOLD,
+                    device=openvino_device,
+                )
+                print(f"[ContextEngine] Using PaddleOCR with OpenVINO acceleration ({openvino_device})")
+            except ImportError as e:
+                print(f"[ContextEngine] OpenVINO OCR not available: {e}, falling back to PaddleOCR...")
+                use_openvino = False
+            except Exception as e:
+                print(f"[ContextEngine] Error loading OpenVINO OCR: {e}, falling back to PaddleOCR...")
+                use_openvino = False
+
+        if not use_openvino or ocr_engine is None:
+            try:
+                from .paddle_ocr_engine import PaddleOCREngine
+                ocr_engine = PaddleOCREngine(
+                    language=settings.OCR_LANGUAGE,
+                    use_gpu=settings.OCR_USE_GPU,
+                    confidence_threshold=settings.OCR_CONFIDENCE_THRESHOLD,
+                    use_angle_cls=getattr(settings, 'PADDLEOCR_USE_ANGLE_CLS', False)
+                )
+                gpu_status = "GPU" if settings.OCR_USE_GPU else "CPU"
+                print(f"[ContextEngine] Using PaddleOCR engine ({gpu_status}, language: {settings.OCR_LANGUAGE})")
+            except ImportError as e:
+                print(f"[ContextEngine] PaddleOCR not installed: {e}, trying fallback...")
+            except Exception as e:
+                print(f"[ContextEngine] Error loading PaddleOCR: {e}, trying fallback...")
+
+    # Try Windows OCR (fastest, good for clean UI text)
+    if ocr_engine is None and (ocr_backend == "windows_ocr" or ocr_backend == "auto"):
+        try:
+            from .fast_ocr_engine import FastOCREngine, _check_windows_ocr_available
+            if _check_windows_ocr_available():
+                ocr_engine = FastOCREngine(
+                    language="eng",
+                    confidence_threshold=settings.OCR_CONFIDENCE_THRESHOLD,
+                    prefer_windows_ocr=True,
+                )
+                print(f"[ContextEngine] Using Windows OCR engine - fastest (~100-300ms)")
+            else:
+                print("[ContextEngine] Windows OCR not available, trying fallback...")
+        except ImportError as e:
+            print(f"[ContextEngine] Windows OCR not installed: {e}, trying fallback...")
+        except Exception as e:
+            print(f"[ContextEngine] Error loading Windows OCR: {e}, trying fallback...")
+
+    # Try Surya OCR (only if explicitly requested - very slow on CPU)
+    if ocr_engine is None and ocr_backend == "surya":
+        try:
+            from .surya_ocr_engine import SuryaOCREngine
+            surya_engine = SuryaOCREngine(
+                language=settings.OCR_LANGUAGE,
+                confidence_threshold=settings.OCR_CONFIDENCE_THRESHOLD,
+            )
+            if surya_engine.is_available():
+                ocr_engine = surya_engine
+                print(f"[ContextEngine] Using Surya OCR engine (language: {settings.OCR_LANGUAGE}) - WARNING: very slow on CPU!")
+            else:
+                print("[ContextEngine] Surya OCR not available, trying fallback...")
+        except ImportError as e:
+            print(f"[ContextEngine] Surya OCR not installed: {e}, trying fallback...")
+        except Exception as e:
+            print(f"[ContextEngine] Error loading Surya OCR: {e}, trying fallback...")
+
+    # Try PaddleOCR as fallback for other backends
+    if ocr_engine is None and ocr_backend in ["windows_ocr", "auto", "surya"]:
+        try:
+            from .paddle_ocr_engine import PaddleOCREngine
+            ocr_engine = PaddleOCREngine(
+                language=settings.OCR_LANGUAGE,
+                use_gpu=settings.OCR_USE_GPU,
+                confidence_threshold=settings.OCR_CONFIDENCE_THRESHOLD,
+                use_angle_cls=getattr(settings, 'PADDLEOCR_USE_ANGLE_CLS', False)
+            )
+            print(f"[ContextEngine] Using PaddleOCR engine as fallback (language: {settings.OCR_LANGUAGE})")
+        except ImportError as e:
+            print(f"[ContextEngine] PaddleOCR not installed: {e}, trying EasyOCR fallback...")
+        except Exception as e:
+            print(f"[ContextEngine] Error loading PaddleOCR: {e}, trying EasyOCR fallback...")
+
+    # Final fallback to EasyOCR
+    if ocr_engine is None:
         ocr_engine = OCREngine(
             language=settings.OCR_LANGUAGE,
             use_gpu=settings.OCR_USE_GPU,
             confidence_threshold=settings.OCR_CONFIDENCE_THRESHOLD
         )
-        print(f"Using EasyOCR engine (language: {settings.OCR_LANGUAGE})")
+        print(f"[ContextEngine] Using EasyOCR engine (language: {settings.OCR_LANGUAGE}) - fallback")
+
+    print(f"[ContextEngine] Debug timing enabled: {debug_timing}\n")
 
     return ContextEngine(
         preprocessor=preprocessor,

@@ -4,6 +4,13 @@ Pedagogy Backend Configuration
 Application settings loaded from environment variables.
 """
 
+# CRITICAL: Set these environment variables BEFORE any imports
+# PaddleOCR/PaddleX connectivity check can add 10-60 seconds on first load
+import os
+os.environ['DISABLE_MODEL_SOURCE_CHECK'] = 'True'
+os.environ['PADDLEX_NO_CONNECTIVITY_CHECK'] = 'True'
+os.environ['GLOG_minloglevel'] = '2'  # Suppress PaddlePaddle verbose logging
+
 from pydantic_settings import BaseSettings
 from functools import lru_cache
 from typing import List
@@ -88,9 +95,16 @@ class Settings(BaseSettings):
     YOLO_CONFIDENCE_THRESHOLD: float = 0.5
     YOLO_IOU_THRESHOLD: float = 0.45
 
-    # OCR Backend Selection: "paddleocr" (fast, recommended) or "easyocr" (fallback)
-    # PaddleOCR is ~200x faster than EasyOCR on CPU
+    # OCR Backend Selection: "windows_ocr" (fastest), "surya", "paddleocr", or "easyocr"
+    # windows_ocr: ~100-300ms, good accuracy (Windows 10+ native API, best for clean UI text)
+    # surya: ~8-15min on CPU (needs GPU), excellent accuracy (transformer-based)
+    # paddleocr: ~5-10s, excellent accuracy (uses PaddlePaddle)
+    # easyocr: ~1-3s, good accuracy (fallback)
+    # auto: tries windows_ocr -> paddleocr -> easyocr
     OCR_BACKEND: str = "paddleocr"
+
+    # Debug Settings
+    CV_DEBUG_TIMING: bool = True  # Enable detailed timing logs for CV pipeline
 
     # Common OCR Settings
     OCR_LANGUAGE: str = "en"
@@ -99,6 +113,20 @@ class Settings(BaseSettings):
 
     # PaddleOCR Settings (used when OCR_BACKEND="paddleocr")
     PADDLEOCR_USE_ANGLE_CLS: bool = False  # Disable for speed (only enable for rotated text)
+    PADDLEOCR_USE_OPENVINO: bool = True  # Use OpenVINO for faster OCR inference (~5-10x speedup)
+    PADDLEOCR_OPENVINO_DEVICE: str = "CPU"  # OpenVINO device: "CPU", "GPU", or "AUTO"
+
+    # Surya OCR Settings (used when OCR_BACKEND="surya")
+    SURYA_OCR_LANGUAGE: str = "en"
+    SURYA_OCR_CONFIDENCE_THRESHOLD: float = 0.5
+
+    # Fast OCR Settings (for target verification - uses Tesseract/Windows OCR)
+    # Much faster than PaddleOCR (~500-700ms vs ~5-10s) but less accurate
+    FAST_OCR_BACKEND: str = "tesseract"  # "tesseract", "windows_ocr", or "paddleocr"
+    FAST_OCR_LANGUAGE: str = "eng"  # Tesseract language code
+    FAST_OCR_CONFIDENCE_THRESHOLD: float = 0.3
+    FAST_OCR_PREFER_WINDOWS: bool = True  # Use Windows OCR if available (Windows 10+)
+    TESSERACT_PATH: str = r"C:\Users\GuestMi\AppData\Local\Programs\Tesseract-OCR\tesseract.exe"
 
     # CV Processing Settings
     CV_MAX_IMAGE_SIZE_MB: int = 10
@@ -107,7 +135,7 @@ class Settings(BaseSettings):
     CV_DEFAULT_RESIZE_HEIGHT: int = 720   # 720p for balance of speed and accuracy
 
     # OpenVINO Settings (for YOLO acceleration)
-    OMNIPARSER_USE_OPENVINO: bool = True  # Export and use OpenVINO model for faster inference
+    OMNIPARSER_USE_OPENVINO: bool = False  # Disabled - OpenVINO causes StopIteration error on this system
     OMNIPARSER_OPENVINO_HALF: bool = True  # Use FP16 precision
 
     # =============================================

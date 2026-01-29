@@ -1,4 +1,3 @@
-
 # =============================================
 # PEDAGOGY BACKEND DEPENDENCIES
 # =============================================
@@ -59,13 +58,30 @@ transformers>=4.36.0
 huggingface-hub>=0.20.0
 
 # OCR Engines
-# PaddleOCR - Fast OCR engine (primary, ~200x faster than EasyOCR)
+# Surya OCR - Primary OCR engine (excellent accuracy, fast ~300-500ms)
+# Uses PyTorch, models download automatically on first use
+surya-ocr>=0.6.0
+
+# PaddleOCR - Fallback OCR engine (~5-10s but very accurate)
 # Requires Python 3.8-3.12
 paddlepaddle>=2.6.0
 paddleocr>=2.9.0
+paddle2onnx>=1.2.0  # For converting PaddleOCR models to OpenVINO
 
-# EasyOCR - Fallback OCR engine (kept for compatibility)
+# EasyOCR - Legacy fallback OCR engine (kept for compatibility)
 easyocr>=1.7.0
+
+# Fast OCR for target verification (~200-400ms vs ~5-10s with PaddleOCR)
+# RapidOCR - Optimized PaddleOCR, faster than Tesseract, pure Python
+rapidocr-onnxruntime>=1.3.0
+rapidocr-openvino>=1.3.0  # OpenVINO-accelerated OCR (~700-800ms)
+# Tesseract - Legacy fallback (requires Tesseract binary installed)
+pytesseract>=0.3.10
+# Windows OCR - Native Windows 10+ OCR API (fastest ~50-200ms)
+# winocr>=0.0.7  # Optional - uncomment if Windows 10+ and want faster verification
+
+# Perceptual hashing for fast page verification
+imagehash>=4.3.0
 
 # Image Processing
 opencv-python-headless>=4.8.0
@@ -88,3 +104,10 @@ openvino>=2024.0.0
 
 # Google Gemini API (primary - free tier with good performance)
 google-genai>=1.0.0
+
+# =============================================
+# PHASE 8: MULTI-APP SUPPORT - WINDOW DETECTION
+# =============================================
+
+# Windows UI Automation for browser URL extraction
+pywinauto>=0.6.9  # Windows only - extracts URLs from browser address bars
