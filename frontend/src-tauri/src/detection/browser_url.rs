@@ -14,7 +14,9 @@ use uiautomation::types::Handle;
 /// This function uses the uiautomation crate to find and read the browser's
 /// address bar. It tries multiple strategies to locate the address bar:
 /// 1. Search for Edit controls with names containing address bar indicators
-/// 2. Look for controls with specific automation IDs
+/// 2. Search for ComboBox controls (some browsers use these)
+/// 3. Look for controls with specific automation IDs
+/// 4. Try walking the accessibility tree
 ///
 /// Returns the full URL if found, None otherwise.
 pub fn get_browser_url_uia(hwnd: isize) -> Option<String> {
@@ -22,14 +24,18 @@ pub fn get_browser_url_uia(hwnd: isize) -> Option<String> {
     use uiautomation::controls::ControlType;
     use uiautomation::patterns::UIValuePattern;
     use uiautomation::patterns::UILegacyIAccessiblePattern;
+    use uiautomation::patterns::UITextPattern;
 
-    log::debug!("Attempting URL extraction via uiautomation crate for hwnd: {}", hwnd);
+    log::info!("=== URL EXTRACTION START for hwnd: {} ===", hwnd);
 
     // Initialize UI Automation
     let automation = match UIAutomation::new() {
-        Ok(auto) => auto,
+        Ok(auto) => {
+            log::info!("UIAutomation instance created successfully");
+            auto
+        }
         Err(e) => {
-            log::warn!("Failed to create UIAutomation instance: {:?}", e);
+            log::error!("Failed to create UIAutomation instance: {:?}", e);
             return None;
         }
     };
@@ -37,14 +43,23 @@ pub fn get_browser_url_uia(hwnd: isize) -> Option<String> {
     // Get element from window handle - use uiautomation's Handle type
     let hwnd_handle = Handle::from(hwnd);
     let window_element = match automation.element_from_handle(hwnd_handle) {
-        Ok(elem) => elem,
+        Ok(elem) => {
+            log::info!("Got window element from handle");
+            elem
+        }
         Err(e) => {
-            log::warn!("Failed to get element from handle: {:?}", e);
+            log::error!("Failed to get element from handle: {:?}", e);
             return None;
         }
     };
 
-    log::debug!("Got window element, searching for address bar...");
+    // Log window element info
+    if let Ok(name) = window_element.get_name() {
+        log::info!("Window element name: '{}'", name);
+    }
+    if let Ok(class) = window_element.get_classname() {
+        log::info!("Window element class: '{}'", class);
+    }
 
     // Address bar name indicators for various browsers
     let indicators = [
@@ -58,91 +73,196 @@ pub fn get_browser_url_uia(hwnd: isize) -> Option<String> {
         "web address",
         "navigate to",
         "urlbar",
+        "addresseditbox",
+        "edit",  // Generic fallback
     ];
 
-    // Strategy 1: Use matcher to find Edit controls
-    let matcher = automation.create_matcher()
-        .from(window_element.clone())
-        .timeout(1000)
-        .control_type(ControlType::Edit);
+    // Control types to search (browsers may use different types)
+    let control_types = [
+        ControlType::Edit,
+        ControlType::ComboBox,
+        ControlType::Text,
+        ControlType::Document,
+    ];
 
-    if let Ok(elements) = matcher.find_all() {
-        log::debug!("Found {} Edit controls", elements.len());
+    for control_type in &control_types {
+        log::info!("Searching for {:?} controls...", control_type);
 
-        for element in elements {
-            // Check element name
-            if let Ok(name) = element.get_name() {
-                let name_lower = name.to_lowercase();
+        let matcher = automation.create_matcher()
+            .from(window_element.clone())
+            .timeout(500)
+            .control_type(*control_type);
 
-                for indicator in &indicators {
-                    if name_lower.contains(indicator) {
-                        log::debug!("Found element with name containing '{}': {}", indicator, name);
+        match matcher.find_all() {
+            Ok(elements) => {
+                log::info!("Found {} {:?} controls", elements.len(), control_type);
 
-                        // Try to get value
+                for (idx, element) in elements.iter().enumerate() {
+                    // Log element details for debugging
+                    let name = element.get_name().unwrap_or_default();
+                    let auto_id = element.get_automation_id().unwrap_or_default();
+                    let class = element.get_classname().unwrap_or_default();
+
+                    // Only log if element has useful info
+                    if !name.is_empty() || !auto_id.is_empty() {
+                        log::debug!("  [{}] name='{}', autoId='{}', class='{}'",
+                            idx, name, auto_id, class);
+                    }
+
+                    let name_lower = name.to_lowercase();
+                    let auto_id_lower = auto_id.to_lowercase();
+
+                    // Check if this might be an address bar
+                    let is_address_bar = indicators.iter().any(|ind| {
+                        name_lower.contains(ind) || auto_id_lower.contains(ind)
+                    });
+
+                    if is_address_bar {
+                        log::info!("  >> Potential address bar found: name='{}', autoId='{}'", name, auto_id);
+
+                        // Try ValuePattern first
                         if let Ok(value_pattern) = element.get_pattern::<UIValuePattern>() {
                             if let Ok(value) = value_pattern.get_value() {
+                                log::info!("  >> ValuePattern value: '{}'", value);
                                 if !value.is_empty() && looks_like_url(&value) {
-                                    log::info!("Got URL via ValuePattern: {}", value);
+                                    log::info!("=== URL FOUND via ValuePattern: {} ===", value);
                                     return Some(value);
                                 }
                             }
                         }
 
-                        // Try legacy pattern
+                        // Try LegacyIAccessible pattern
                         if let Ok(legacy_pattern) = element.get_pattern::<UILegacyIAccessiblePattern>() {
                             if let Ok(value) = legacy_pattern.get_value() {
+                                log::info!("  >> LegacyPattern value: '{}'", value);
                                 if !value.is_empty() && looks_like_url(&value) {
-                                    log::info!("Got URL via LegacyPattern: {}", value);
+                                    log::info!("=== URL FOUND via LegacyPattern: {} ===", value);
                                     return Some(value);
+                                }
+                            }
+                            // Also try get_name from legacy pattern
+                            if let Ok(name_val) = legacy_pattern.get_name() {
+                                log::info!("  >> LegacyPattern name: '{}'", name_val);
+                            }
+                        }
+
+                        // Try TextPattern
+                        if let Ok(text_pattern) = element.get_pattern::<UITextPattern>() {
+                            if let Ok(range) = text_pattern.get_document_range() {
+                                if let Ok(text) = range.get_text(-1) {
+                                    log::info!("  >> TextPattern text: '{}'", text);
+                                    if !text.is_empty() && looks_like_url(&text) {
+                                        log::info!("=== URL FOUND via TextPattern: {} ===", text);
+                                        return Some(text);
+                                    }
                                 }
                             }
                         }
                     }
-                }
-            }
 
-            // Also check AutomationId for browser-specific patterns
-            if let Ok(auto_id) = element.get_automation_id() {
-                let auto_id_lower = auto_id.to_lowercase();
-                if auto_id_lower.contains("address") ||
-                   auto_id_lower.contains("url") ||
-                   auto_id_lower.contains("omnibox") ||
-                   auto_id_lower.contains("urlbar") {
-                    log::debug!("Found element with AutomationId: {}", auto_id);
-
+                    // Also check any element with a URL-like value
                     if let Ok(value_pattern) = element.get_pattern::<UIValuePattern>() {
                         if let Ok(value) = value_pattern.get_value() {
                             if !value.is_empty() && looks_like_url(&value) {
-                                log::info!("Got URL via AutomationId match: {}", value);
+                                log::info!("=== URL FOUND in {:?} control: {} ===", control_type, value);
                                 return Some(value);
                             }
                         }
                     }
                 }
             }
-        }
-    }
-
-    // Strategy 2: Try to get any Edit control's value that looks like a URL
-    let matcher2 = automation.create_matcher()
-        .from(window_element)
-        .timeout(500)
-        .control_type(ControlType::Edit);
-
-    if let Ok(elements) = matcher2.find_all() {
-        for element in elements {
-            if let Ok(value_pattern) = element.get_pattern::<UIValuePattern>() {
-                if let Ok(value) = value_pattern.get_value() {
-                    if !value.is_empty() && looks_like_url(&value) {
-                        log::info!("Got URL from Edit control: {}", value);
-                        return Some(value);
-                    }
-                }
+            Err(e) => {
+                log::warn!("Failed to find {:?} controls: {:?}", control_type, e);
             }
         }
     }
 
-    log::debug!("Could not find URL via uiautomation");
+    // Strategy 2: Recursive depth-first tree walk
+    log::info!("Trying recursive tree walk for URL values...");
+
+    if let Ok(walker) = automation.get_raw_view_walker() {
+        let mut visited = 0;
+        if let Some(url) = recursive_find_url(&walker, &window_element, 0, &mut visited, &indicators) {
+            log::info!("=== URL FOUND via recursive tree walk: {} ===", url);
+            return Some(url);
+        }
+        log::info!("Recursive tree walk checked {} elements, no URL found", visited);
+    }
+
+    log::info!("=== URL EXTRACTION FAILED for hwnd: {} ===", hwnd);
+    None
+}
+
+/// Recursively search the UI tree for elements containing URLs
+fn recursive_find_url(
+    walker: &uiautomation::UITreeWalker,
+    element: &uiautomation::UIElement,
+    depth: usize,
+    visited: &mut usize,
+    indicators: &[&str],
+) -> Option<String> {
+    use uiautomation::patterns::UIValuePattern;
+    use uiautomation::patterns::UILegacyIAccessiblePattern;
+
+    // Limit search depth and total elements
+    if depth > 15 || *visited > 500 {
+        return None;
+    }
+
+    *visited += 1;
+
+    // Get element info for debugging
+    let name = element.get_name().unwrap_or_default();
+    let auto_id = element.get_automation_id().unwrap_or_default();
+    let class = element.get_classname().unwrap_or_default();
+    let control_type = element.get_control_type().ok();
+
+    // Log interesting elements (address bar related)
+    let name_lower = name.to_lowercase();
+    let auto_id_lower = auto_id.to_lowercase();
+
+    let is_address_related = indicators.iter().any(|ind| {
+        name_lower.contains(ind) || auto_id_lower.contains(ind)
+    }) || auto_id_lower.contains("toolbar")
+       || class.to_lowercase().contains("address")
+       || class.to_lowercase().contains("url");
+
+    if is_address_related && depth <= 8 {
+        log::info!("{}[{}] name='{}', autoId='{}', class='{}', type={:?}",
+            "  ".repeat(depth), *visited, name, auto_id, class, control_type);
+    }
+
+    // Check for URL value in this element
+    if let Ok(value_pattern) = element.get_pattern::<UIValuePattern>() {
+        if let Ok(value) = value_pattern.get_value() {
+            if !value.is_empty() && looks_like_url(&value) {
+                log::info!("{}>> URL value found: {}", "  ".repeat(depth), value);
+                return Some(value);
+            }
+        }
+    }
+
+    // Try LegacyIAccessible pattern
+    if let Ok(legacy_pattern) = element.get_pattern::<UILegacyIAccessiblePattern>() {
+        if let Ok(value) = legacy_pattern.get_value() {
+            if !value.is_empty() && looks_like_url(&value) {
+                log::info!("{}>> URL via legacy pattern: {}", "  ".repeat(depth), value);
+                return Some(value);
+            }
+        }
+    }
+
+    // Recurse into children
+    if let Ok(first_child) = walker.get_first_child(element) {
+        let mut current = Some(first_child);
+        while let Some(ref child) = current {
+            if let Some(url) = recursive_find_url(walker, child, depth + 1, visited, indicators) {
+                return Some(url);
+            }
+            current = walker.get_next_sibling(child).ok();
+        }
+    }
+
     None
 }
 

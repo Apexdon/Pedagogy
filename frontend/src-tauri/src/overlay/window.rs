@@ -4,7 +4,7 @@
 //! overlay window that displays halo highlights.
 
 use serde::{Deserialize, Serialize};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 use tokio::sync::RwLock;
@@ -56,6 +56,11 @@ pub struct OverlayManager {
 
     /// Current halo state
     state: Arc<RwLock<HaloState>>,
+
+    /// Version counter to prevent stale hide tasks from hiding the window
+    /// Incremented on each show_halo call, checked by delayed hide tasks
+    /// Wrapped in Arc so it can be shared with spawned tasks
+    show_version: Arc<AtomicU64>,
 }
 
 impl Default for OverlayManager {
@@ -70,6 +75,7 @@ impl OverlayManager {
         Self {
             is_created: AtomicBool::new(false),
             state: Arc::new(RwLock::new(HaloState::new())),
+            show_version: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -193,6 +199,11 @@ impl OverlayManager {
         app: &AppHandle,
         target: HaloTarget,
     ) -> Result<(), OverlayError> {
+        // Increment show version to invalidate any pending hide tasks
+        // This prevents race conditions where a delayed hide from a previous
+        // hide_halo call would hide the window after we show it
+        self.show_version.fetch_add(1, Ordering::SeqCst);
+
         // Ensure overlay exists
         if !self.is_created() {
             self.create_overlay(app).await?;
@@ -251,11 +262,33 @@ impl OverlayManager {
             };
             window.emit(events::HIDE_HALO, payload)?;
 
+            // Capture current show version - if a new show_halo is called before
+            // the delayed hide executes, the version will be different and we
+            // should NOT hide the window (it would hide the newly shown halo)
+            let version_at_hide = self.show_version.load(Ordering::SeqCst);
+
+            // Clone the Arc so the spawned task can check the current version
+            let show_version_clone = Arc::clone(&self.show_version);
+
             // Wait for fade-out animation to complete (300ms) before hiding window
             // This allows the graceful fade-out animation to play
             let window_clone = window.clone();
+
             tokio::spawn(async move {
                 tokio::time::sleep(std::time::Duration::from_millis(350)).await;
+
+                // Check if show_halo was called while we were waiting
+                // If the version changed, a new halo was shown - don't hide it!
+                let current_version = show_version_clone.load(Ordering::SeqCst);
+                if current_version != version_at_hide {
+                    log::debug!(
+                        "Skipping delayed hide: show_version changed ({} -> {})",
+                        version_at_hide,
+                        current_version
+                    );
+                    return;
+                }
+
                 if let Err(e) = window_clone.hide() {
                     log::warn!("Failed to hide overlay window: {}", e);
                 }
@@ -275,6 +308,10 @@ impl OverlayManager {
         if !self.is_created() {
             return self.show_halo(app, target).await;
         }
+
+        // Increment show version to invalidate any pending hide tasks
+        // This prevents race conditions where a delayed hide would hide the updated halo
+        self.show_version.fetch_add(1, Ordering::SeqCst);
 
         // Update state
         {

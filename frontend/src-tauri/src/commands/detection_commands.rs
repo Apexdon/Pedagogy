@@ -174,6 +174,41 @@ pub async fn capture_window(
     }
 }
 
+/// Captures a specific window by its HWND (window handle).
+///
+/// This is more efficient than title matching when the HWND is already known,
+/// such as after a successful URL-based browser detection.
+#[tauri::command]
+pub async fn capture_window_by_hwnd(
+    hwnd: i64,
+) -> Result<CaptureResponse, String> {
+    log::info!("Capturing window by HWND: {}...", hwnd);
+
+    match screenshot::capture_window_by_hwnd(hwnd as isize) {
+        Ok(result) => {
+            log::info!(
+                "Window captured: {}x{} - '{}'",
+                result.width,
+                result.height,
+                result.monitor_name
+            );
+            Ok(CaptureResponse {
+                success: true,
+                result: Some(result),
+                error: None,
+            })
+        }
+        Err(e) => {
+            log::error!("Window capture by HWND failed: {}", e);
+            Ok(CaptureResponse {
+                success: false,
+                result: None,
+                error: Some(e.to_string()),
+            })
+        }
+    }
+}
+
 /// Gets the title of the currently active window.
 #[tauri::command]
 pub fn get_active_window_title() -> Result<WindowInfo, String> {
@@ -1053,7 +1088,7 @@ fn extract_title_keywords_from_url_patterns(url_patterns: &Option<Vec<String>>) 
 #[cfg(target_os = "windows")]
 fn find_browser_window_by_origin(url_patterns: &[String]) -> Option<ExtendedWindowInfo> {
     use windows::Win32::UI::WindowsAndMessaging::{
-        GetDesktopWindow, GetWindow, IsWindowVisible, GW_CHILD, GW_HWNDNEXT,
+        GetDesktopWindow, GetWindow, IsWindowVisible, GetWindowTextW, GW_CHILD, GW_HWNDNEXT,
     };
     use windows::Win32::Foundation::HWND;
     use crate::detection::browser_detection::{
@@ -1061,24 +1096,26 @@ fn find_browser_window_by_origin(url_patterns: &[String]) -> Option<ExtendedWind
     };
     use crate::detection::browser_url::{get_browser_url_uia, url_matches_origin_pattern};
 
-    log::info!("Searching all browser windows for URL patterns: {:?}", url_patterns);
+    log::info!("=== ORIGIN-BASED MATCHING START ===");
+    log::info!("URL patterns: {:?}", url_patterns);
 
     let mut browser_count = 0;
     let mut visible_window_count = 0;
-    let mut process_name_found_count = 0;
+    let mut url_extraction_attempts = 0;
+    let mut url_extraction_successes = 0;
 
     unsafe {
         let desktop = GetDesktopWindow();
         let first_child = match GetWindow(desktop, GW_CHILD) {
             Ok(h) => h,
             Err(e) => {
-                log::warn!("Failed to get first child window: {:?}", e);
+                log::error!("Failed to get first child window: {:?}", e);
                 return None;
             }
         };
 
         if first_child.0.is_null() {
-            log::warn!("No windows found under desktop");
+            log::error!("No windows found under desktop");
             return None;
         }
 
@@ -1087,26 +1124,35 @@ fn find_browser_window_by_origin(url_patterns: &[String]) -> Option<ExtendedWind
         loop {
             if IsWindowVisible(hwnd).as_bool() {
                 visible_window_count += 1;
+
                 // Get process name
                 if let Some(process_name) = get_process_name_from_hwnd(hwnd) {
-                    process_name_found_count += 1;
-                    // Log first few process names to help debug
-                    if process_name_found_count <= 10 || process_name.to_lowercase().contains("chrome") || process_name.to_lowercase().contains("edge") || process_name.to_lowercase().contains("firefox") {
-                        log::debug!("Found process: {}", process_name);
-                    }
                     // Only check browser processes
                     if is_browser_process(&process_name) {
                         browser_count += 1;
-                        log::info!("Found browser window: {}", process_name);
+
+                        // Get window title for logging
+                        let mut title_buf: [u16; 512] = [0; 512];
+                        let len = GetWindowTextW(hwnd, &mut title_buf);
+                        let title = if len > 0 {
+                            String::from_utf16_lossy(&title_buf[..len as usize])
+                        } else {
+                            "(no title)".to_string()
+                        };
+
+                        log::info!(">>> Browser #{}: {} - hwnd={}", browser_count, process_name, hwnd.0 as isize);
+                        log::info!("    Title: '{}'", title);
 
                         // Try to extract URL using uiautomation crate
+                        url_extraction_attempts += 1;
                         if let Some(url) = get_browser_url_uia(hwnd.0 as isize) {
-                            log::info!("Browser {} has URL: {}", process_name, url);
+                            url_extraction_successes += 1;
+                            log::info!("    URL extracted: {}", url);
 
                             // Check if URL matches any of the patterns
                             for pattern in url_patterns {
                                 if url_matches_origin_pattern(&url, pattern) {
-                                    log::info!("URL '{}' matches pattern '{}'", url, pattern);
+                                    log::info!("=== MATCH FOUND! URL '{}' matches pattern '{}' ===", url, pattern);
 
                                     // Get full window info
                                     if let Some(info) = get_extended_window_info_from_hwnd(hwnd) {
@@ -1114,8 +1160,9 @@ fn find_browser_window_by_origin(url_patterns: &[String]) -> Option<ExtendedWind
                                     }
                                 }
                             }
+                            log::info!("    URL does not match any patterns");
                         } else {
-                            log::debug!("Could not extract URL from browser: {}", process_name);
+                            log::warn!("    URL extraction FAILED for this browser window");
                         }
                     }
                 }
@@ -1128,8 +1175,9 @@ fn find_browser_window_by_origin(url_patterns: &[String]) -> Option<ExtendedWind
             }
         }
 
-        log::info!("Window enumeration complete: {} visible, {} with process names, {} browsers",
-            visible_window_count, process_name_found_count, browser_count);
+        log::info!("=== ORIGIN-BASED MATCHING COMPLETE ===");
+        log::info!("Stats: {} visible windows, {} browsers, {} URL attempts, {} URL successes",
+            visible_window_count, browser_count, url_extraction_attempts, url_extraction_successes);
     }
 
     None

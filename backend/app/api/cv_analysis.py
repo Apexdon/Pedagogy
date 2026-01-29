@@ -7,7 +7,7 @@ Endpoints for screen capture analysis, UI detection, and text extraction.
 from fastapi import APIRouter, HTTPException, Depends
 from typing import Annotated
 
-from app.services.cv_service import CVService, get_cv_service
+from app.services.cv_service import CVService, get_cv_service, reset_cv_service
 from app.schemas.cv_analysis import (
     AnalyzeScreenRequest,
     DetectUIRequest,
@@ -135,3 +135,25 @@ async def get_cv_health(
     - Preprocessor (settings)
     """
     return await cv_service.get_health_status()
+
+
+@router.post(
+    "/reset",
+    summary="Reset CV pipeline",
+    description="Reset the CV pipeline to reinitialize with current settings"
+)
+async def reset_cv_pipeline() -> dict:
+    """
+    Reset the CV pipeline to reinitialize with current settings.
+
+    Use this endpoint when configuration has changed (e.g., OCR backend)
+    and you need the CV service to pick up the new settings without
+    restarting the server.
+
+    Returns confirmation of reset.
+    """
+    reset_cv_service()
+    return {
+        "status": "reset",
+        "message": "CV pipeline will reinitialize on next request"
+    }

@@ -9,7 +9,7 @@
  * or interacts with the target application.
  */
 
-import { captureScreenLowRes, captureWindow } from '../api/detection';
+import { captureScreenLowRes, captureWindow, captureWindowByHwnd } from '../api/detection';
 
 // =============================================
 // Types
@@ -91,6 +91,7 @@ class ScreenChangeDetector {
   private previousHash: string | null = null;
   private changeCallback: ChangeCallback | null = null;
   private targetWindowPattern: string | null = null;
+  private targetHwnd: number | null = null;  // HWND for URL-based matching
   private isChangeInProgress = false;
   private lastChangeTime = 0;
   private changeCount = 0;
@@ -98,10 +99,10 @@ class ScreenChangeDetector {
   constructor(config?: Partial<ChangeDetectorConfig>) {
     this.config = {
       pollIntervalMs: 100,      // Check for changes every 100ms
-      debounceMs: 400,          // Wait 400ms after changes stop
+      debounceMs: 1000,         // Wait 1000ms (1s) after changes stop for screen stability
       detectWidth: 160,         // Very low res for speed
       detectHeight: 120,
-      changeThreshold: 0.05,    // 5% difference triggers change
+      changeThreshold: 0.15,    // 15% difference triggers change (higher to ignore clock/cursor/animations)
       ...config,
     };
   }
@@ -111,8 +112,9 @@ class ScreenChangeDetector {
    *
    * @param callback Called when screen changes are detected (after debounce)
    * @param targetPattern Optional window title pattern to capture
+   * @param targetHwnd Optional HWND for URL-based matching (takes priority over pattern)
    */
-  start(callback: ChangeCallback, targetPattern?: string): void {
+  start(callback: ChangeCallback, targetPattern?: string, targetHwnd?: number): void {
     if (this.isRunning) {
       console.log('[ScreenChangeDetector] Already running');
       return;
@@ -120,6 +122,7 @@ class ScreenChangeDetector {
 
     this.changeCallback = callback;
     this.targetWindowPattern = targetPattern || null;
+    this.targetHwnd = targetHwnd || null;
     this.previousHash = null;
     this.isRunning = true;
     this.changeCount = 0;
@@ -128,6 +131,7 @@ class ScreenChangeDetector {
       pollIntervalMs: this.config.pollIntervalMs,
       debounceMs: this.config.debounceMs,
       targetPattern: this.targetWindowPattern,
+      targetHwnd: this.targetHwnd,
     });
 
     // Start polling loop
@@ -166,6 +170,14 @@ class ScreenChangeDetector {
    */
   setTargetPattern(pattern: string | null): void {
     this.targetWindowPattern = pattern;
+  }
+
+  /**
+   * Update the target HWND for URL-based matching.
+   */
+  setTargetHwnd(hwnd: number | null): void {
+    this.targetHwnd = hwnd;
+    console.log('[ScreenChangeDetector] Target HWND updated:', hwnd);
   }
 
   /**
@@ -208,8 +220,20 @@ class ScreenChangeDetector {
       // Capture low-res screenshot for change detection
       let imageBase64: string | undefined;
 
-      if (this.targetWindowPattern) {
-        // Try to capture target window
+      // Priority 1: Use HWND for URL-based matching (most reliable)
+      if (this.targetHwnd) {
+        try {
+          const result = await captureWindowByHwnd(this.targetHwnd);
+          if (result.success && result.image_base64) {
+            imageBase64 = result.image_base64;
+          }
+        } catch {
+          // Fall back to other methods if HWND capture fails
+        }
+      }
+
+      // Priority 2: Use window title pattern
+      if (!imageBase64 && this.targetWindowPattern) {
         try {
           const result = await captureWindow(this.targetWindowPattern);
           if (result.success && result.image_base64) {
@@ -220,8 +244,8 @@ class ScreenChangeDetector {
         }
       }
 
+      // Priority 3: Full screen capture (least reliable)
       if (!imageBase64) {
-        // Capture full screen at low resolution
         const result = await captureScreenLowRes(
           this.config.detectWidth,
           this.config.detectHeight

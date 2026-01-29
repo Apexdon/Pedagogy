@@ -337,6 +337,8 @@ export interface FastVerifyResponse {
   ocr_time_ms: number;
   total_time_ms: number;
   hwnd_cached: boolean;
+  page_hash_cached: boolean;  // True if verified from perceptual hash cache
+  verification_method: 'page_hash' | 'hwnd' | 'ocr' | 'none' | 'error';
   message: string;
 }
 
@@ -371,6 +373,7 @@ export interface FastPositionUpdateRequest {
     x2: number;
     y2: number;
   } | null;
+  session_id?: string;  // Session ID for reference image tracking
 }
 
 export interface FastPositionUpdateResponse {
@@ -383,22 +386,67 @@ export interface FastPositionUpdateResponse {
     y2: number;
   } | null;
   confidence: number;
-  ocr_time_ms: number;
+  scroll_offset_y: number;  // Scroll offset detected (positive = scrolled down)
+  detection_method: 'scroll_offset' | 'ocr_fallback' | 'none';  // How position was determined
+  processing_time_ms: number;
   total_time_ms: number;
   message: string;
+  reference_stored: boolean;  // Whether a new reference image was stored
 }
 
 /**
- * Fast halo position update using OCR-only (for scroll handling).
+ * Fast halo position update using scroll offset detection.
  *
- * This endpoint is designed for quick position updates when user scrolls:
- * - Runs ONLY OCR on the screenshot (skips slow OmniParser detection)
- * - Finds the target label text in OCR results
- * - Returns the new bounding box position
+ * This endpoint is optimized for quick position updates when user scrolls:
+ * - Compares current screenshot with stored reference image
+ * - Detects scroll offset using template matching (~10-50ms)
+ * - Applies offset to known bounding box
  *
- * Much faster than full CV analysis (~5-10 seconds vs ~50 seconds).
+ * Much faster than OCR-based detection (~10-50ms vs ~500-2000ms).
  */
 export const fastPositionUpdate = async (request: FastPositionUpdateRequest): Promise<FastPositionUpdateResponse> => {
   const response = await apiClient.post<FastPositionUpdateResponse>('/guidance/update-position', request);
+  return response.data;
+};
+
+// =============================================
+// Browser URL Detection API (Python-based)
+// =============================================
+
+export interface BrowserInfo {
+  hwnd: number;
+  title: string;
+  process_name: string;
+  url: string | null;
+  domain: string | null;
+}
+
+export interface BrowserUrlRequest {
+  url_patterns: string[];
+}
+
+export interface BrowserUrlResponse {
+  success: boolean;
+  found: boolean;
+  browser: BrowserInfo | null;
+  matched_pattern: string | null;
+  all_browsers: BrowserInfo[];
+  message: string;
+  detection_time_ms: number;
+}
+
+/**
+ * Detect browser window with matching URL patterns using Python backend.
+ *
+ * This uses pywinauto to extract URLs from browser address bars via
+ * Windows UI Automation. More reliable than the Rust-based implementation.
+ *
+ * @param urlPatterns - List of URL patterns to match (e.g., ["rs-online.com"])
+ * @returns Browser info if found, including extracted URL
+ */
+export const detectBrowserWithUrl = async (urlPatterns: string[]): Promise<BrowserUrlResponse> => {
+  const response = await apiClient.post<BrowserUrlResponse>('/guidance/detect-browser', {
+    url_patterns: urlPatterns,
+  });
   return response.data;
 };

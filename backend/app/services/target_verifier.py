@@ -167,6 +167,9 @@ class TargetVerifier:
             for region in text_regions
         ).lower()
 
+        # Log combined text (useful for debugging verification issues)
+        # logger.debug(f"[TargetVerifier] Combined text ({len(all_text_lower)} chars): '{all_text_lower[:200]}'...")
+
         # Check for keyword matches
         matched_keywords = []
         keywords_lower = [kw.lower() for kw in brand_keywords]

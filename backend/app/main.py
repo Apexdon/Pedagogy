@@ -4,9 +4,9 @@ Pedagogy Backend - Main Application
 FastAPI application entry point with health check endpoints.
 """
 
-import os
-# Disable PaddleOCR connectivity check on startup (adds ~10-20 seconds delay)
-os.environ['DISABLE_MODEL_SOURCE_CHECK'] = 'True'
+# CRITICAL: Import preload FIRST before ANY other imports
+# This sets environment variables needed by PaddleOCR/PaddleX
+from app import preload  # noqa: F401 - side effects only
 
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Depends

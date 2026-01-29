@@ -31,13 +31,15 @@ export function TargetAppsPage() {
     app_name: '',
     description: '',
     match_mode: 'auto',
+    url_patterns: [],
     brand_keywords: [],
     process_name: '',
     is_active: true,
     is_default: false,
   });
 
-  // Comma-separated input for brand keywords
+  // Comma-separated inputs
+  const [urlPatternsInput, setUrlPatternsInput] = useState('');
   const [brandKeywordsInput, setBrandKeywordsInput] = useState('');
 
   const fetchTargetApps = useCallback(async () => {
@@ -63,11 +65,13 @@ export function TargetAppsPage() {
       app_name: '',
       description: '',
       match_mode: 'auto',
+      url_patterns: [],
       brand_keywords: [],
       process_name: '',
       is_active: true,
       is_default: false,
     });
+    setUrlPatternsInput('');
     setBrandKeywordsInput('');
   };
 
@@ -83,11 +87,13 @@ export function TargetAppsPage() {
       app_name: app.app_name,
       description: app.description || '',
       match_mode: app.match_mode,
+      url_patterns: app.url_patterns || [],
       brand_keywords: app.brand_keywords || [],
       process_name: app.process_name || '',
       is_active: app.is_active,
       is_default: app.is_default,
     });
+    setUrlPatternsInput((app.url_patterns || []).join(', '));
     setBrandKeywordsInput((app.brand_keywords || []).join(', '));
     setModalMode('edit');
   };
@@ -105,6 +111,12 @@ export function TargetAppsPage() {
     try {
       setIsSubmitting(true);
 
+      // Parse URL patterns from comma-separated input
+      const urlPatterns = urlPatternsInput
+        .split(',')
+        .map(p => p.trim())
+        .filter(p => p.length > 0);
+
       // Parse brand keywords from comma-separated input
       const brandKeywords = brandKeywordsInput
         .split(',')
@@ -116,8 +128,9 @@ export function TargetAppsPage() {
         app_name: formData.app_name.trim(),
         description: formData.description?.trim() || undefined,
         match_mode: 'auto', // Always use auto mode
-        brand_keywords: brandKeywords.length > 0 ? brandKeywords : null,
-        process_name: formData.process_name?.trim() || null,
+        url_patterns: urlPatterns.length > 0 ? urlPatterns : undefined,
+        brand_keywords: brandKeywords.length > 0 ? brandKeywords : undefined,
+        process_name: formData.process_name?.trim() || undefined,
         is_active: formData.is_active,
         is_default: formData.is_default,
       };
@@ -130,6 +143,7 @@ export function TargetAppsPage() {
         const updateData: TargetAppUpdateRequest = {
           app_name: data.app_name,
           description: data.description,
+          url_patterns: data.url_patterns,
           brand_keywords: data.brand_keywords,
           process_name: data.process_name,
         };
@@ -291,12 +305,12 @@ export function TargetAppsPage() {
               </div>
 
               <div className="mt-4 space-y-2 text-sm">
-                {app.brand_keywords && app.brand_keywords.length > 0 && (
+                {app.url_patterns && app.url_patterns.length > 0 && (
                   <div className="flex items-start gap-2">
-                    <span className="text-gray-500 w-20 flex-shrink-0">Keywords:</span>
-                    <span className="font-medium text-gray-900">
-                      {app.brand_keywords.slice(0, 3).join(', ')}
-                      {app.brand_keywords.length > 3 && ` +${app.brand_keywords.length - 3} more`}
+                    <span className="text-gray-500 w-20 flex-shrink-0">URL:</span>
+                    <span className="font-medium text-primary-700">
+                      {app.url_patterns.slice(0, 2).join(', ')}
+                      {app.url_patterns.length > 2 && ` +${app.url_patterns.length - 2} more`}
                     </span>
                   </div>
                 )}
@@ -306,9 +320,18 @@ export function TargetAppsPage() {
                     <span className="font-medium text-gray-900 truncate">{app.process_name}</span>
                   </div>
                 )}
-                {!app.brand_keywords?.length && !app.process_name && (
+                {app.brand_keywords && app.brand_keywords.length > 0 && (
+                  <div className="flex items-start gap-2">
+                    <span className="text-gray-500 w-20 flex-shrink-0">Keywords:</span>
+                    <span className="font-medium text-gray-600 text-xs">
+                      {app.brand_keywords.slice(0, 3).join(', ')}
+                      {app.brand_keywords.length > 3 && ` +${app.brand_keywords.length - 3} more`}
+                    </span>
+                  </div>
+                )}
+                {!app.url_patterns?.length && !app.process_name && (
                   <p className="text-amber-600 text-xs">
-                    No detection configured. Add brand keywords or process name.
+                    No detection configured. Add URL patterns (for web apps) or process name (for desktop apps).
                   </p>
                 )}
               </div>
@@ -399,22 +422,39 @@ export function TargetAppsPage() {
                   />
                 </div>
 
-                {/* Brand Keywords - Primary detection method */}
-                <div className="p-4 bg-blue-50 rounded-lg border border-blue-200">
-                  <label className="block text-sm font-medium text-blue-900 mb-1">
-                    Brand Keywords (Recommended)
+                {/* URL Patterns - Primary detection for web apps */}
+                <div className="p-4 bg-primary-50 rounded-lg border border-primary-200">
+                  <label className="block text-sm font-medium text-primary-900 mb-1">
+                    URL Patterns (For Web Apps) ⭐
+                  </label>
+                  <input
+                    type="text"
+                    value={urlPatternsInput}
+                    onChange={(e) => setUrlPatternsInput(e.target.value)}
+                    className="w-full px-3 py-2 border border-primary-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 bg-white"
+                    placeholder="e.g., uk.rs-online.com, rs-online.com"
+                  />
+                  <p className="mt-2 text-xs text-primary-700">
+                    Comma-separated domain patterns. The system identifies the target browser window
+                    by extracting the URL from the address bar. This is the most reliable method
+                    for websites as URLs stay constant across page navigations.
+                  </p>
+                </div>
+
+                {/* Brand Keywords - Secondary/fallback */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Brand Keywords (Fallback)
                   </label>
                   <input
                     type="text"
                     value={brandKeywordsInput}
                     onChange={(e) => setBrandKeywordsInput(e.target.value)}
-                    className="w-full px-3 py-2 border border-blue-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white"
-                    placeholder="e.g., RS Components, rs-online, RS PRO"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+                    placeholder="e.g., RS Components, rs-online"
                   />
-                  <p className="mt-2 text-xs text-blue-700">
-                    Comma-separated keywords visible on screen. The system verifies the target
-                    by checking for these keywords in the screen text via OCR. This is the most
-                    reliable detection method for websites.
+                  <p className="mt-1 text-xs text-gray-500">
+                    Used as fallback if URL matching fails. Keywords in browser window title.
                   </p>
                 </div>
 

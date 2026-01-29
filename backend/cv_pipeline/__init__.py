@@ -8,8 +8,10 @@ Components:
 - ImagePreprocessor: Image decoding, validation, and resizing
 - OmniParserDetector: Microsoft OmniParser v2 for UI element detection (recommended, with OpenVINO acceleration)
 - YOLODetector: YOLO v11 based UI element detection (legacy fallback)
-- PaddleOCREngine: PaddleOCR based text extraction (fast, recommended)
+- SuryaOCREngine: Surya OCR text extraction (fast + accurate, recommended, ~300-500ms)
+- PaddleOCREngine: PaddleOCR based text extraction (accurate, ~5-10s)
 - OCREngine: EasyOCR based text extraction (legacy fallback)
+- FastOCREngine: RapidOCR/Tesseract for fast verification (~200-400ms)
 - ContextEngine: Fusion layer that combines detection and OCR (with parallel processing)
 """
 
@@ -44,9 +46,28 @@ from .paddle_ocr_engine import (
     create_paddle_ocr_engine_from_settings
 )
 
+from .fast_ocr_engine import (
+    FastOCREngine,
+    get_fast_ocr_engine,
+    create_fast_ocr_engine_from_settings
+)
+
+from .surya_ocr_engine import (
+    SuryaOCREngine,
+    get_surya_ocr_engine,
+    create_surya_ocr_engine_from_settings
+)
+
 from .context_engine import (
     ContextEngine,
     create_context_engine_from_settings
+)
+
+from .scroll_detector import (
+    ScrollOffsetDetector,
+    ScrollDetectionResult,
+    get_scroll_detector,
+    apply_scroll_offset_to_bbox
 )
 
 
@@ -89,11 +110,22 @@ __all__ = [
     "create_yolo_detector_from_settings",
     "create_detector_from_settings",
     # OCR Engines
+    "SuryaOCREngine",
+    "get_surya_ocr_engine",
+    "create_surya_ocr_engine_from_settings",
     "PaddleOCREngine",
     "create_paddle_ocr_engine_from_settings",
     "OCREngine",
     "create_ocr_engine_from_settings",
+    "FastOCREngine",
+    "get_fast_ocr_engine",
+    "create_fast_ocr_engine_from_settings",
     # Context Engine
     "ContextEngine",
     "create_context_engine_from_settings",
+    # Scroll Detector
+    "ScrollOffsetDetector",
+    "ScrollDetectionResult",
+    "get_scroll_detector",
+    "apply_scroll_offset_to_bbox",
 ]

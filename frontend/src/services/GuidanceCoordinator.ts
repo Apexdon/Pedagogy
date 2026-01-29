@@ -19,10 +19,8 @@ import {
   smartMatchWindow,
   getForegroundWindowSimple,
   type SmartMatchConfig,
-  type SmartMatchResult,
   type ForegroundWindowInfo,
 } from '../api/detection';
-import type { SmartMatchMode } from '../types/guidance';
 import { getScreenChangeDetector, type ScreenChangeDetector } from './ScreenChangeDetector';
 import type { WindowMatchEvent } from '../types/detection';
 import {
@@ -41,7 +39,7 @@ import {
   setSidePanelTargetPattern,
   isSidePanelCreated,
 } from '../api/sidepanel';
-import { getTargetAppSettings, getTargetApp, captureStep, fastVerifyTarget, fastPositionUpdate, type FastVerifyResponse, type FastPositionUpdateResponse } from '../api/guidance';
+import { getTargetAppSettings, getTargetApp, captureStep, fastPositionUpdate, detectBrowserWithUrl, type FastPositionUpdateResponse, type BrowserUrlResponse } from '../api/guidance';
 import type {
   GuidanceSession,
   GuidanceStep,
@@ -78,6 +76,8 @@ export interface CoordinatorState {
   isTargetWindowActive: boolean;
   error: string | null;
   lastUpdateTime: number;
+  /** Cached HWND of matched browser window (for URL-based matching) */
+  matchedBrowserHwnd: number | null;
 }
 
 export interface CoordinatorConfig {
@@ -128,11 +128,12 @@ class GuidanceCoordinator {
   private statusUpdateVersion = 0;
   private isCaptureInProgress = false; // Mutex to prevent concurrent captures
   private screenChangeDetector: ScreenChangeDetector | null = null;
-  private lastForegroundHwnd: number | null = null; // Track foreground window for visual verification
-  private verifiedHwnds: Set<number> = new Set(); // HWNDs verified by backend
+  private verifiedHwnds: Set<number> = new Set(); // HWNDs verified via URL/process matching
   private fastVerifyIntervalId: ReturnType<typeof setInterval> | null = null; // Fast verification monitor
   private lastFullCvTime: number = 0; // Throttle full CV analysis
   private readonly FULL_CV_THROTTLE_MS = 30000; // Only run full CV every 30 seconds max
+  private urlVerificationFailureCount: number = 0; // Consecutive URL verification failures
+  private readonly URL_VERIFICATION_FAILURE_THRESHOLD = 3; // Hide halo only after N consecutive failures
 
   // Callback for external step advancement (set by useGuidanceCoordinator)
   public onPanelNextClicked: (() => Promise<void>) | null = null;
@@ -161,6 +162,7 @@ class GuidanceCoordinator {
       isTargetWindowActive: false,
       error: null,
       lastUpdateTime: Date.now(),
+      matchedBrowserHwnd: null,
     };
 
     this.eventListeners = new Map();
@@ -706,12 +708,13 @@ class GuidanceCoordinator {
       return;
     }
 
-    console.log('[FastVerifyMonitor] Starting fast verification monitor (every 3s)');
+    console.log('[FastVerifyMonitor] Starting fast verification monitor (every 1s)');
 
-    // Run every 3 seconds to quickly detect when user leaves target
+    // Run every 1 second to quickly detect when user leaves target
+    // Fast OCR (~500-700ms) makes this responsive without overloading
     this.fastVerifyIntervalId = setInterval(async () => {
       await this.runFastVerificationCheck();
-    }, 3000);
+    }, 1000);
   }
 
   /**
@@ -723,24 +726,79 @@ class GuidanceCoordinator {
       return;
     }
 
-    // Capture screen
+    // IMPORTANT: Check if user is still on target window before updating
+    // This prevents false halo updates when user switches to another window or tab
     const targetPattern = this.state.targetAppSettings?.target_window_pattern;
+    const urlPatterns = this.state.targetAppSettings?.target_url_patterns;
+    const cachedHwnd = this.state.matchedBrowserHwnd;
+
+    // For URL-based matching with cached HWND, just verify foreground window matches
+    // Don't use Rust smartMatchWindow for URL verification - it's unreliable
+    // Tab switches will be detected when the Python backend finds the target moved off-screen
+    if (cachedHwnd && urlPatterns && urlPatterns.length > 0) {
+      try {
+        const foregroundWindow = await getForegroundWindowSimple();
+
+        if (!foregroundWindow || foregroundWindow.hwnd !== cachedHwnd) {
+          // User switched to a different window - skip this update
+          // If they switched tabs (same HWND, different URL), the Python backend
+          // will detect that the target element is no longer visible
+          console.log('[FastPositionUpdate] Foreground window changed, skipping update');
+          return;
+        }
+
+        // Foreground matches cached HWND - proceed with position update
+        // The Python backend will verify the target is still visible
+      } catch (e) {
+        console.error('[FastPositionUpdate] Could not check foreground window:', e);
+        return;
+      }
+    } else if (targetPattern) {
+      try {
+        const foregroundWindow = await getForegroundWindowSimple();
+        const cleanPattern = targetPattern.replace(/\*/g, '').trim().toLowerCase();
+        const windowTitle = (foregroundWindow?.title || '').toLowerCase();
+
+        if (!windowTitle.includes(cleanPattern)) {
+          console.log('[FastPositionUpdate] Not on target window, skipping update');
+          return;
+        }
+      } catch {
+        // If we can't check foreground window, skip update to be safe
+        console.log('[FastPositionUpdate] Could not verify target window, skipping');
+        return;
+      }
+    }
     let imageBase64: string | undefined;
 
     try {
-      if (targetPattern) {
+      // Priority 1: Use cached browser HWND for URL-based matching
+      if (cachedHwnd) {
+        const { captureWindowByHwnd } = await import('../api/detection');
+        const captureResponse = await captureWindowByHwnd(cachedHwnd);
+        if (captureResponse.success && captureResponse.image_base64) {
+          imageBase64 = captureResponse.image_base64;
+          console.log('[FastPositionUpdate] Captured browser window by HWND');
+        }
+      }
+      // Priority 2: Use title pattern
+      else if (targetPattern) {
         const cleanPattern = targetPattern.replace(/\*/g, '').trim();
         const captureResponse = await captureWindow(cleanPattern);
         if (captureResponse.success && captureResponse.image_base64) {
           imageBase64 = captureResponse.image_base64;
         }
-      } else {
+      }
+      // Priority 3: Full screen fallback (less reliable)
+      else {
+        console.log('[FastPositionUpdate] No HWND or title pattern, using full screen capture');
         const captureResponse = await captureScreen();
         if (captureResponse.success && captureResponse.image_base64) {
           imageBase64 = captureResponse.image_base64;
         }
       }
-    } catch {
+    } catch (err) {
+      console.error('[FastPositionUpdate] Capture error:', err);
       return;
     }
 
@@ -764,10 +822,14 @@ class GuidanceCoordinator {
         image_base64: imageBase64,
         target_label: this.state.currentTarget.label,
         current_bbox: currentBbox,
+        session_id: this.state.session?.session_id,  // Pass session ID for reference tracking
       });
 
       const endTime = performance.now();
-      console.log(`[FastPositionUpdate] Completed in ${(endTime - startTime).toFixed(0)}ms, found: ${result.found}`);
+      console.log(
+        `[FastPositionUpdate] Completed in ${(endTime - startTime).toFixed(0)}ms, ` +
+        `method: ${result.detection_method}, scroll: ${result.scroll_offset_y}px, found: ${result.found}`
+      );
 
       if (result.found && result.new_bbox) {
         // Update halo position
@@ -808,18 +870,12 @@ class GuidanceCoordinator {
 
   /**
    * Run a fast verification check to see if user is still on target app.
-   * If not, immediately hide halo without waiting for full CV.
+   * Uses URL/process matching instead of OCR for reliability.
+   * If not on target, immediately hide halo without waiting for full CV.
    */
   private async runFastVerificationCheck(): Promise<void> {
     // Don't run if full CV is in progress (it will handle verification)
     if (this.isCaptureInProgress) {
-      return;
-    }
-
-    const hasBrandKeywords = this.state.targetAppSettings?.target_brand_keywords &&
-      this.state.targetAppSettings.target_brand_keywords.length > 0;
-
-    if (!hasBrandKeywords) {
       return;
     }
 
@@ -831,75 +887,112 @@ class GuidanceCoordinator {
       return;
     }
 
-    // If HWND is already verified, no need to check
-    if (foregroundWindow && this.verifiedHwnds.has(foregroundWindow.hwnd)) {
+    if (!foregroundWindow) {
       return;
     }
 
-    // Capture screen for verification
-    const targetPattern = this.state.targetAppSettings?.target_window_pattern;
-    let verifyImageBase64: string | undefined;
+    // IMPORTANT: Skip check if foreground window is our own Pedagogy app
+    // This happens when user clicks the side panel (e.g., Next button) during guidance
+    // We should NOT hide the halo just because user interacted with our UI
+    const processNameLower = foregroundWindow.process_name.toLowerCase();
+    const titleLower = foregroundWindow.title.toLowerCase();
 
-    try {
-      if (targetPattern) {
-        const cleanPattern = targetPattern.replace(/\*/g, '').trim();
-        const captureResponse = await captureWindow(cleanPattern);
-        if (captureResponse.success && captureResponse.image_base64) {
-          verifyImageBase64 = captureResponse.image_base64;
-        }
-      } else {
-        const captureResponse = await captureScreen();
-        if (captureResponse.success && captureResponse.image_base64) {
-          verifyImageBase64 = captureResponse.image_base64;
-        }
+    // Debug: log what window is being checked
+    console.log('[FastVerifyMonitor] Checking window:', {
+      title: foregroundWindow.title,
+      process: foregroundWindow.process_name,
+      hwnd: foregroundWindow.hwnd,
+      isBrowser: foregroundWindow.is_browser,
+    });
+
+    if (processNameLower.includes('pedagogy') ||
+        titleLower.includes('pedagogy') ||
+        titleLower.includes('guidance panel')) {
+      // User clicked on our app - this is fine, don't hide halo
+      console.log('[FastVerifyMonitor] Skipping - detected Pedagogy app window');
+      return;
+    }
+
+    // Use smart matching to verify if we're still on target
+    // This uses URL/process matching which is more reliable than OCR
+    const targetSettings = this.state.targetAppSettings;
+    if (!targetSettings) {
+      return;
+    }
+
+    // Check if it's a browser and we have URL patterns
+    const urlPatterns = targetSettings.target_url_patterns;
+    const processName = targetSettings.target_process_name;
+
+    let isOnTarget = false;
+
+    // For browsers with URL patterns, check if we have a Python-verified HWND
+    // Python's pywinauto is reliable for URL extraction, Rust's uiautomation is not
+    if (foregroundWindow.is_browser && urlPatterns && urlPatterns.length > 0) {
+      // IMPORTANT: Check for null HWND FIRST to avoid the bug where (number !== null) is always true
+      if (!this.state.matchedBrowserHwnd) {
+        // No cached HWND yet - wait for Python to verify
+        // Don't use Rust verification as it's unreliable
+        console.log('[FastVerifyMonitor] No cached browser HWND, waiting for Python verification');
+        return; // Skip this check cycle, let Python handle it
       }
-    } catch {
-      return;
-    }
 
-    if (!verifyImageBase64) {
-      return;
-    }
+      // We have a cached HWND - check if foreground matches
+      if (foregroundWindow.hwnd === this.state.matchedBrowserHwnd) {
+        // Same browser window that Python verified - trust it
+        this.urlVerificationFailureCount = 0;
+        isOnTarget = true;
+        // Keep the HWND in verified set
+        this.verifiedHwnds.add(foregroundWindow.hwnd);
+      } else {
+        // Different browser window - user switched to another browser window
+        // This could be a different tab/window, mark as off-target
+        // The next full CV capture will re-verify with Python
+        console.log('[FastVerifyMonitor] Foreground browser HWND changed, user may have switched windows');
+        isOnTarget = false;
 
-    // Run fast verification
-    try {
-      console.log('[FastVerifyMonitor] Running quick check...');
-      const fastResult = await fastVerifyTarget({
-        image_base64: verifyImageBase64,
-        brand_keywords: this.state.targetAppSettings!.target_brand_keywords!,
-        hwnd: foregroundWindow?.hwnd || null,
-      });
-
-      console.log('[FastVerifyMonitor] Result:', fastResult.is_verified ? 'ON target' : 'OFF target');
-
-      if (!fastResult.is_verified) {
-        // User left target app - immediately hide halo
-        console.log('[FastVerifyMonitor] User left target app, hiding halo immediately');
-
-        if (this.state.isTargetWindowActive) {
-          this.state.isTargetWindowActive = false;
-          this.emitEvent('target_window_lost', { windowTitle: foregroundWindow?.title || '' });
-        }
-
-        if (foregroundWindow) {
+        // Clear cached HWND - will be re-verified by next Python detection
+        if (this.verifiedHwnds.has(foregroundWindow.hwnd)) {
           this.verifiedHwnds.delete(foregroundWindow.hwnd);
         }
-
-        await hideHalo();
-        this.state.currentTarget = null;
-      } else {
-        // User is on target - cache HWND
-        if (fastResult.hwnd_cached && foregroundWindow) {
-          this.verifiedHwnds.add(foregroundWindow.hwnd);
-        }
-
-        if (!this.state.isTargetWindowActive) {
-          this.state.isTargetWindowActive = true;
-          this.emitEvent('target_window_found', { windowTitle: foregroundWindow?.title || '' });
-        }
       }
-    } catch (error) {
-      console.error('[FastVerifyMonitor] Error:', error);
+    }
+    // For non-browser windows, we can use HWND caching since the app doesn't change
+    else if (this.verifiedHwnds.has(foregroundWindow.hwnd)) {
+      // Non-browser HWND already verified, skip further checks
+      return;
+    }
+    // For desktop apps, check process name
+    else if (processName) {
+      isOnTarget = foregroundWindow.process_name.toLowerCase().includes(processName.toLowerCase());
+      if (isOnTarget) {
+        this.verifiedHwnds.add(foregroundWindow.hwnd);
+      }
+    }
+
+    if (!isOnTarget) {
+      // User left target app - immediately hide halo
+      console.log('[FastVerifyMonitor] User left target app, hiding halo immediately', {
+        windowTitle: foregroundWindow.title,
+        processName: foregroundWindow.process_name,
+        isBrowser: foregroundWindow.is_browser,
+        cachedHwnd: this.state.matchedBrowserHwnd,
+        foregroundHwnd: foregroundWindow.hwnd,
+        urlPatterns: targetSettings?.target_url_patterns,
+      });
+
+      if (this.state.isTargetWindowActive) {
+        this.state.isTargetWindowActive = false;
+        this.emitEvent('target_window_lost', { windowTitle: foregroundWindow?.title || '' });
+      }
+
+      this.verifiedHwnds.delete(foregroundWindow.hwnd);
+
+      await hideHalo();
+      this.state.currentTarget = null;
+    } else if (!this.state.isTargetWindowActive) {
+      this.state.isTargetWindowActive = true;
+      this.emitEvent('target_window_found', { windowTitle: foregroundWindow?.title || '' });
     }
   }
 
@@ -914,12 +1007,13 @@ class GuidanceCoordinator {
     }
 
     // Get or create the screen change detector
+    // Use higher threshold (15%) to ignore clock/cursor/animation changes
     this.screenChangeDetector = getScreenChangeDetector({
       pollIntervalMs: this.config.changeDetectionPollMs,
       debounceMs: this.config.changeDetectionDebounceMs,
       detectWidth: 160,
       detectHeight: 120,
-      changeThreshold: 0.05,
+      changeThreshold: 0.15,  // 15% difference to filter out minor changes
     });
 
     // Get target window pattern for focused capture
@@ -931,6 +1025,9 @@ class GuidanceCoordinator {
     console.log('[GuidanceCoordinator] Performing initial capture...');
     this.lastFullCvTime = Date.now();
     this.captureAndMatchTarget().catch(console.error);
+
+    // Get cached HWND for URL-based matching
+    const cachedHwnd = this.state.matchedBrowserHwnd;
 
     // Start change detection - callback fires when screen changes
     this.screenChangeDetector.start(
@@ -955,7 +1052,8 @@ class GuidanceCoordinator {
           this.captureAndMatchTarget().catch(console.error);
         }
       },
-      targetPattern || undefined
+      targetPattern || undefined,
+      cachedHwnd || undefined
     );
 
     console.log('[GuidanceCoordinator] Capture loop started (change detection mode)');
@@ -1012,7 +1110,6 @@ class GuidanceCoordinator {
       try {
         foregroundWindow = await getForegroundWindowSimple();
         if (foregroundWindow) {
-          this.lastForegroundHwnd = foregroundWindow.hwnd;
           console.log('Foreground window:', {
             hwnd: foregroundWindow.hwnd,
             title: foregroundWindow.title,
@@ -1024,215 +1121,190 @@ class GuidanceCoordinator {
         console.warn('Failed to get foreground window info:', e);
       }
 
-      // VISUAL VERIFICATION APPROACH:
-      // If brand keywords are configured, we use FAST verification (OCR-only) first
-      // before running the expensive full CV analysis (~85 seconds).
-      // This significantly improves responsiveness.
-      const hasBrandKeywords = this.state.targetAppSettings?.target_brand_keywords &&
-        this.state.targetAppSettings.target_brand_keywords.length > 0;
+      // SMART WINDOW CAPTURE - No OCR verification needed!
+      // We use reliable identification methods:
+      // - Web apps: URL pattern matching (Windows UI Automation extracts URL from browser)
+      // - Desktop apps: Process name matching
+      // These methods directly identify the target, so no OCR verification is required.
 
-      // Check if this HWND is already verified (cached)
-      const isHwndVerified = foregroundWindow &&
-        this.verifiedHwnds.has(foregroundWindow.hwnd);
+      const targetPattern = this.state.targetAppSettings?.target_window_pattern;
+      const urlPatterns = this.state.targetAppSettings?.target_url_patterns;
+      const processName = this.state.targetAppSettings?.target_process_name;
+      const brandKeywords = this.state.targetAppSettings?.target_brand_keywords;
+      let imageBase64: string | undefined;
+      let captureMethod: 'url' | 'process' | 'title' | 'keyword' | 'fullscreen' | null = null;
 
-      if (hasBrandKeywords) {
-        console.log('[Visual Verification] Brand keywords configured:', this.state.targetAppSettings?.target_brand_keywords);
-        console.log('[Visual Verification] HWND verified (cached):', isHwndVerified);
+      // PRIORITY 1: URL pattern matching (most reliable for web apps)
+      // Uses Python backend for reliable URL extraction from browser address bars
+      if (urlPatterns && urlPatterns.length > 0) {
+        console.log('[Capture] PRIMARY: Python-based URL pattern matching:', urlPatterns);
+        try {
+          // Use Python backend for browser URL detection (more reliable than Rust)
+          const browserResult: BrowserUrlResponse = await detectBrowserWithUrl(urlPatterns);
 
-        // If HWND is already verified, skip fast verification and go straight to full CV
-        if (!isHwndVerified) {
-          // Need to capture screen first for fast verification
-          const targetPattern = this.state.targetAppSettings?.target_window_pattern;
-          let verifyImageBase64: string | undefined;
+          console.log('[Capture] Browser detection result:', browserResult);
 
-          if (targetPattern) {
-            const cleanPattern = targetPattern.replace(/\*/g, '').trim();
-            try {
-              const captureResponse = await captureWindow(cleanPattern);
-              if (captureResponse.success && captureResponse.image_base64) {
-                verifyImageBase64 = captureResponse.image_base64;
-              }
-            } catch {
-              // Fallback to screen capture
-              const fallback = await captureScreen();
-              if (fallback.success && fallback.image_base64) {
-                verifyImageBase64 = fallback.image_base64;
+          if (browserResult.found && browserResult.browser?.title) {
+            console.log('[Capture] URL match found:', browserResult.browser.title);
+            console.log('[Capture] Extracted URL:', browserResult.browser.url);
+            console.log('[Capture] Matched pattern:', browserResult.matched_pattern);
+
+            // Capture the browser window by title
+            const captureResponse = await captureWindow(browserResult.browser.title);
+            if (captureResponse.success && captureResponse.image_base64) {
+              imageBase64 = captureResponse.image_base64;
+              captureMethod = 'url';
+              console.log('[Capture] URL-matched capture successful');
+
+              // Cache the verified HWND for future fast position updates
+              if (browserResult.browser.hwnd) {
+                this.verifiedHwnds.add(browserResult.browser.hwnd);
+                this.state.matchedBrowserHwnd = browserResult.browser.hwnd;
+                console.log('[Capture] Cached browser HWND for fast updates:', browserResult.browser.hwnd);
+
+                // Reset URL verification failure counter on successful Python detection
+                this.urlVerificationFailureCount = 0;
+
+                // Update ScreenChangeDetector with the new HWND
+                if (this.screenChangeDetector) {
+                  this.screenChangeDetector.setTargetHwnd(browserResult.browser.hwnd);
+                }
               }
             }
           } else {
-            const captureResponse = await captureScreen();
-            if (captureResponse.success && captureResponse.image_base64) {
-              verifyImageBase64 = captureResponse.image_base64;
-            }
+            console.log('[Capture] No browser with matching URL found');
+            console.log('[Capture] Detection time:', browserResult.detection_time_ms, 'ms');
+            console.log('[Capture] All browsers found:', browserResult.all_browsers);
           }
-
-          if (verifyImageBase64) {
-            // Run FAST verification (OCR-only, ~5-10 seconds vs ~85 seconds)
-            console.log('[Visual Verification] Running FAST verification (OCR-only)...');
-            const fastStartTime = performance.now();
-
-            try {
-              const fastResult: FastVerifyResponse = await fastVerifyTarget({
-                image_base64: verifyImageBase64,
-                brand_keywords: this.state.targetAppSettings!.target_brand_keywords!,
-                hwnd: foregroundWindow?.hwnd || null,
-              });
-
-              const fastEndTime = performance.now();
-              console.log(`[Visual Verification] FAST verification completed in ${(fastEndTime - fastStartTime).toFixed(0)}ms`);
-              console.log('[Visual Verification] Result:', {
-                verified: fastResult.is_verified,
-                keywords: fastResult.matched_keywords,
-                ocrTime: fastResult.ocr_time_ms,
-                totalTime: fastResult.total_time_ms,
-              });
-
-              if (!fastResult.is_verified) {
-                // Not on target application - hide halo and return early
-                console.log('[Visual Verification] NOT on target app:', fastResult.message);
-
-                if (this.state.isTargetWindowActive) {
-                  this.state.isTargetWindowActive = false;
-                  this.emitEvent('target_window_lost', { windowTitle: foregroundWindow?.title || '' });
-                }
-
-                // Remove from verified cache if it was there
-                if (foregroundWindow) {
-                  this.verifiedHwnds.delete(foregroundWindow.hwnd);
-                }
-
-                await hideHalo();
-                this.state.currentTarget = null;
-                return; // Skip full CV analysis
+        } catch (e) {
+          console.error('[Capture] URL match error:', e);
+          // Fall back to Rust-based matching if Python backend fails
+          try {
+            console.log('[Capture] Falling back to Rust-based URL matching');
+            const smartConfig: SmartMatchConfig = {
+              mode: 'url',
+              url_patterns: urlPatterns,
+            };
+            const smartResult = await smartMatchWindow(smartConfig);
+            if (smartResult.matched && smartResult.window_info?.title) {
+              const captureResponse = await captureWindow(smartResult.window_info.title);
+              if (captureResponse.success && captureResponse.image_base64) {
+                imageBase64 = captureResponse.image_base64;
+                captureMethod = 'url';
+                console.log('[Capture] Rust fallback URL-matched capture successful');
               }
-
-              // Target verified via fast OCR
-              console.log('[Visual Verification] Target VERIFIED via fast OCR');
-
-              // Cache the verified HWND locally
-              if (fastResult.hwnd_cached && foregroundWindow) {
-                this.verifiedHwnds.add(foregroundWindow.hwnd);
-                console.log('[Visual Verification] HWND added to local cache:', foregroundWindow.hwnd);
-              }
-
-              // Update target window active state
-              const wasActive = this.state.isTargetWindowActive;
-              this.state.isTargetWindowActive = true;
-              if (!wasActive) {
-                this.emitEvent('target_window_found', { windowTitle: foregroundWindow?.title || '' });
-              }
-
-            } catch (fastError) {
-              console.error('[Visual Verification] Fast verification failed:', fastError);
-              // Continue to full CV analysis as fallback
             }
+          } catch (fallbackError) {
+            console.error('[Capture] Rust fallback also failed:', fallbackError);
           }
-        } else {
-          console.log('[Visual Verification] HWND already verified, skipping fast verification');
-        }
-
-        // Proceed to full CV analysis (for element matching)
-      } else {
-        // Legacy mode - use smart matching
-        const matchResult = await this.checkTargetWindowSmart();
-
-        console.log('Smart match result:', {
-          matched: matchResult.matched,
-          mode: matchResult.match_mode_used,
-          pattern: matchResult.matched_pattern,
-          debug: matchResult.debug_info,
-        });
-
-        if (!matchResult.matched && this.state.isTargetWindowActive) {
-          console.log('Target window lost, hiding halo');
-          this.state.isTargetWindowActive = false;
-          this.emitEvent('target_window_lost', { windowTitle: matchResult.debug_info.window_title });
-          await hideHalo();
-          return;
-        }
-
-        if (!matchResult.matched) {
-          console.log('Not on target window, skipping capture');
-          return; // Don't capture if not on target window
-        }
-
-        console.log('Target window is active, proceeding to capture...');
-
-        // Emit event when target window is first found
-        const wasActive = this.state.isTargetWindowActive;
-        this.state.isTargetWindowActive = true;
-        if (!wasActive) {
-          console.log('First time target found, emitting event');
-          this.emitEvent('target_window_found', { windowTitle: matchResult.debug_info.window_title });
         }
       }
 
-      // Step 1: Capture target window via Tauri (window-specific, not full screen)
-      // This captures ONLY the target application window, excluding taskbar, sidebars, etc.
-      let imageBase64: string | undefined;
-      const targetPattern = this.state.targetAppSettings?.target_window_pattern;
+      // PRIORITY 2: Process name matching (reliable for desktop apps)
+      if (!imageBase64 && processName) {
+        console.log('[Capture] FALLBACK 1: Smart match with process name:', processName);
+        try {
+          const smartConfig: SmartMatchConfig = {
+            mode: 'process',
+            process_name: processName,
+          };
+          const smartResult = await smartMatchWindow(smartConfig);
 
-      if (targetPattern) {
-        // Strip wildcards from pattern for window title matching
+          if (smartResult.matched && smartResult.window_info?.title) {
+            console.log('[Capture] Process match found:', smartResult.window_info.title);
+
+            const captureResponse = await captureWindow(smartResult.window_info.title);
+            if (captureResponse.success && captureResponse.image_base64) {
+              imageBase64 = captureResponse.image_base64;
+              captureMethod = 'process';
+              console.log('[Capture] Process-matched capture successful');
+            }
+          } else {
+            console.log('[Capture] No window with matching process found');
+          }
+        } catch (e) {
+          console.error('[Capture] Process match error:', e);
+        }
+      }
+
+      // PRIORITY 3: Window title pattern (fallback)
+      if (!imageBase64 && targetPattern) {
         const cleanPattern = targetPattern.replace(/\*/g, '').trim();
-        console.log('Capturing target window via Tauri, pattern:', cleanPattern);
-
+        console.log('[Capture] FALLBACK 2: Window title pattern:', cleanPattern);
         try {
           const captureResponse = await captureWindow(cleanPattern);
           if (captureResponse.success && captureResponse.image_base64) {
             imageBase64 = captureResponse.image_base64;
-            console.log('Tauri window capture successful, captured:', captureResponse.monitor_name, 'image size:', imageBase64.length);
-          } else {
-            console.warn('Tauri window capture failed:', captureResponse.error);
-            // Fallback to full screen capture
-            console.log('Falling back to full screen capture...');
-            const fallbackCapture = await captureScreen();
-            if (fallbackCapture.success && fallbackCapture.image_base64) {
-              imageBase64 = fallbackCapture.image_base64;
-              console.log('Fallback screen capture successful');
-            }
+            captureMethod = 'title';
+            console.log('[Capture] Title pattern capture successful');
           }
-        } catch (captureError) {
-          console.error('Tauri window capture error:', captureError);
-          // Fallback to full screen capture
-          try {
-            const fallbackCapture = await captureScreen();
-            if (fallbackCapture.success && fallbackCapture.image_base64) {
-              imageBase64 = fallbackCapture.image_base64;
-              console.log('Fallback screen capture successful after error');
-            }
-          } catch (fallbackError) {
-            console.error('Fallback capture also failed:', fallbackError);
-          }
+        } catch (e) {
+          console.error('[Capture] Title pattern error:', e);
         }
-      } else {
-        // No target pattern, use full screen capture
-        console.log('No target pattern, using full screen capture...');
+      }
+
+      // PRIORITY 4: Brand keywords in title (fallback)
+      if (!imageBase64 && brandKeywords && brandKeywords.length > 0) {
+        console.log('[Capture] FALLBACK 3: Brand keywords:', brandKeywords);
+        try {
+          for (const keyword of brandKeywords) {
+            const captureResponse = await captureWindow(keyword);
+            if (captureResponse.success && captureResponse.image_base64) {
+              imageBase64 = captureResponse.image_base64;
+              captureMethod = 'keyword';
+              console.log('[Capture] Brand keyword capture successful:', keyword);
+              break;
+            }
+          }
+        } catch (e) {
+          console.error('[Capture] Brand keyword error:', e);
+        }
+      }
+
+      // PRIORITY 5: Full screen (last resort - skip CV analysis)
+      if (!imageBase64) {
+        console.warn('[Capture] LAST RESORT: Full screen capture');
         try {
           const captureResponse = await captureScreen();
           if (captureResponse.success && captureResponse.image_base64) {
             imageBase64 = captureResponse.image_base64;
-            console.log('Tauri screen capture successful, image size:', imageBase64.length);
-          } else {
-            console.warn('Tauri capture failed:', captureResponse.error);
+            captureMethod = 'fullscreen';
           }
-        } catch (captureError) {
-          console.error('Tauri capture error:', captureError);
+        } catch (e) {
+          console.error('[Capture] Full screen capture failed:', e);
         }
       }
 
+      if (!imageBase64) {
+        console.error('[Capture] No image captured, cannot proceed');
+        return;
+      }
+
+      // Full screen capture includes wrong windows - don't run CV analysis
+      if (captureMethod === 'fullscreen') {
+        console.warn('[Capture] Full screen fallback - skipping CV analysis (mixed content)');
+        await hideHalo();
+        this.state.currentTarget = null;
+        return;
+      }
+
+      // Target window found via reliable method - update state
+      console.log(`[Capture] Target identified via ${captureMethod} matching`);
+      const wasActive = this.state.isTargetWindowActive;
+      this.state.isTargetWindowActive = true;
+      if (!wasActive) {
+        this.emitEvent('target_window_found', { windowTitle: foregroundWindow?.title || '' });
+      }
+
       // Step 2: Call backend to analyze and match target for current step
-      // Pass HWND for visual verification caching
-      // IMPORTANT: Skip verification if we already verified via fast OCR endpoint
-      // This avoids redundant OCR processing in the full CV pipeline
-      const skipVerification = hasBrandKeywords || isHwndVerified;
+      // Note: imageBase64 was already captured via reliable method (URL/process matching)
+      // Skip backend verification since frontend already verified target via smart matching
       const captureOptions: { hwnd?: number; skipVerification?: boolean } = {
         hwnd: foregroundWindow?.hwnd,
-        skipVerification: skipVerification || undefined,
+        skipVerification: true, // Already verified via URL/process matching
       };
-      console.log('[CaptureStep] skipVerification:', skipVerification, '(hasBrandKeywords:', hasBrandKeywords, ', isHwndVerified:', isHwndVerified, ')');
-      console.log('About to call captureStep for session:', this.state.session.session_id,
-        'with image:', !!imageBase64, 'hwnd:', captureOptions.hwnd, 'skipVerification:', captureOptions.skipVerification);
+      console.log('[CaptureStep] Calling backend for session:', this.state.session.session_id,
+        'captureMethod:', captureMethod, 'hwnd:', captureOptions.hwnd);
 
       let captureResult;
       try {
@@ -1255,8 +1327,8 @@ class GuidanceCoordinator {
       }
 
       // Handle visual verification response from backend (only if verification wasn't skipped)
-      // When skipVerification is true, the backend assumes we already verified via fast OCR
-      if (!skipVerification && captureResult.target_verified !== undefined) {
+      // When skipVerification is true, the backend assumes we already verified via URL/process matching
+      if (!captureOptions.skipVerification && captureResult.target_verified !== undefined) {
         console.log('[Visual Verification] Backend result:', {
           verified: captureResult.target_verified,
           keywords: captureResult.verification_keywords_matched,
@@ -1323,70 +1395,6 @@ class GuidanceCoordinator {
       console.log('captureAndMatchTarget: Capture complete (unlocked)');
     }
   }
-
-  /**
-   * Check if target window is active using smart matching.
-   * Uses URL matching for browsers, process matching for desktop apps,
-   * and falls back to title matching.
-   */
-  private async checkTargetWindowSmart(): Promise<SmartMatchResult> {
-    const settings = this.state.targetAppSettings;
-
-    // If no target configured, always match
-    if (!settings?.is_configured) {
-      return {
-        matched: true,
-        match_mode_used: 'none',
-        window_info: null,
-        matched_pattern: null,
-        debug_info: {
-          window_title: '',
-          process_name: null,
-          is_browser: false,
-          browser_type: null,
-          detected_url: null,
-          detected_domain: null,
-        },
-      };
-    }
-
-    // Build smart match config from target app settings
-    const config: SmartMatchConfig = {
-      // Use match mode from settings, default to 'auto'
-      mode: (settings.target_match_mode as SmartMatchMode) || 'auto',
-      // URL patterns for website matching
-      url_patterns: settings.target_url_patterns ||
-        (settings.target_url_pattern ? [settings.target_url_pattern] : undefined),
-      // Process name for desktop app matching
-      process_name: settings.target_process_name || undefined,
-      // Window title pattern (legacy fallback)
-      title_pattern: settings.target_window_pattern || undefined,
-    };
-
-    console.log('[GuidanceCoordinator] Smart match config:', config);
-
-    try {
-      return await smartMatchWindow(config);
-    } catch (error) {
-      console.error('[GuidanceCoordinator] Smart match failed:', error);
-      // Return no match on error
-      return {
-        matched: false,
-        match_mode_used: 'error',
-        window_info: null,
-        matched_pattern: null,
-        debug_info: {
-          window_title: '',
-          process_name: null,
-          is_browser: false,
-          browser_type: null,
-          detected_url: null,
-          detected_domain: null,
-        },
-      };
-    }
-  }
-
   // =============================================
   // Halo Display
   // =============================================

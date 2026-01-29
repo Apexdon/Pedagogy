@@ -268,6 +268,8 @@ class FastVerifyResponse(BaseModel):
     ocr_time_ms: float = 0.0
     total_time_ms: float = 0.0
     hwnd_cached: bool = False
+    page_hash_cached: bool = False  # True if verified from perceptual hash cache
+    verification_method: str = "ocr"  # "page_hash", "hwnd", "ocr", "none"
     message: str
 
 
@@ -276,10 +278,11 @@ class FastVerifyResponse(BaseModel):
 # =============================================
 
 class FastPositionUpdateRequest(BaseModel):
-    """Request for fast halo position update (OCR-only, for scroll handling)."""
+    """Request for fast halo position update using scroll offset detection."""
     image_base64: str = Field(..., description="Base64 encoded screenshot")
     target_label: str = Field(..., description="The label text to find")
-    current_bbox: Optional[BoundingBox] = Field(None, description="Current bounding box for proximity matching")
+    current_bbox: Optional[BoundingBox] = Field(None, description="Current bounding box for scroll offset calculation")
+    session_id: Optional[str] = Field(None, description="Session ID for reference image tracking")
 
 
 class FastPositionUpdateResponse(BaseModel):
@@ -288,6 +291,9 @@ class FastPositionUpdateResponse(BaseModel):
     found: bool
     new_bbox: Optional[BoundingBox] = None
     confidence: float = 0.0
-    ocr_time_ms: float = 0.0
+    scroll_offset_y: int = 0  # Scroll offset detected (positive = scrolled down)
+    detection_method: str = "none"  # "scroll_offset", "ocr_fallback", or "none"
+    processing_time_ms: float = 0.0
     total_time_ms: float = 0.0
     message: str
+    reference_stored: bool = False  # Whether a new reference image was stored

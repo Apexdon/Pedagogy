@@ -6,10 +6,16 @@ Significantly faster than EasyOCR, especially on CPU.
 Implements lazy model loading with global cache.
 """
 
+import os
 import time
 from typing import Dict, List, Optional
 
 import numpy as np
+
+# Disable PaddleOCR's connectivity check to avoid network delays
+os.environ["DISABLE_MODEL_SOURCE_CHECK"] = "True"
+# Disable PaddlePaddle verbose logging
+os.environ["GLOG_minloglevel"] = "2"
 
 from .data_classes import BoundingBox, TextRegion, OCRResult
 

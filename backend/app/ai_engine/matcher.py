@@ -147,12 +147,20 @@ class ElementMatcher:
             # Check for any word overlap
             common_words = target_words & element_words
             if common_words:
-                # Calculate overlap ratio
-                overlap_ratio = len(common_words) / min(len(target_words), len(element_words))
-                if overlap_ratio >= 0.5:  # At least half the words match
+                # Calculate overlap ratio - use target words as the denominator
+                # This ensures the target's words are found in the element
+                overlap_ratio = len(common_words) / len(target_words)
+
+                # Require higher overlap for high scores to avoid false positives
+                # e.g., "Parcel Tracking" vs "[Your Order Number/Tracking" only shares 1/2 words
+                if overlap_ratio >= 0.9:  # Nearly all target words match
                     return 0.85
+                elif overlap_ratio >= 0.75:  # Most target words match
+                    return 0.75
+                elif overlap_ratio >= 0.5:  # At least half target words match
+                    return 0.6 + (0.15 * overlap_ratio)  # Max 0.675 for 50% match
                 elif overlap_ratio > 0:  # Some words match
-                    return 0.7 + (0.15 * overlap_ratio)
+                    return 0.4 + (0.2 * overlap_ratio)  # Max 0.5 for <50% match
 
         # Fuzzy match using SequenceMatcher
         return SequenceMatcher(None, target, element).ratio()

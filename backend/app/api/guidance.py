@@ -1227,44 +1227,86 @@ async def fast_verify_target(
     current_user: User = Depends(get_current_user),
 ):
     """
-    Fast visual verification using OCR-only (no UI element detection).
+    Fast visual verification using multi-tier caching and optimized OCR.
 
-    This endpoint is designed for quick target application verification:
-    1. Runs ONLY OCR on the screenshot (skips slow OmniParser detection)
-    2. Checks if brand keywords exist in the OCR text
-    3. Returns within ~5-10 seconds (vs ~85 seconds for full CV analysis)
+    Verification tiers (in order of speed):
+    1. Perceptual hash cache (~1ms) - Matches previously verified pages
+    2. HWND cache (~1ms) - Matches previously verified window handles
+    3. Fast OCR (~200-400ms) - Header-only ROI with RapidOCR/Windows OCR
 
-    Use this for:
-    - Quick verification before starting full CV analysis
-    - Continuous monitoring to detect when user navigates away
-    - Initial window matching before expensive element detection
+    This endpoint is designed for quick target application verification
+    and runs every 1 second during guidance sessions.
 
-    The full CV analysis (capture_step) should only run AFTER this
-    endpoint confirms the user is on the target application.
+    Performance optimizations:
+    - Perceptual hash cache: Skip OCR when navigating between verified pages
+    - HWND cache: Skip OCR when same window is still active
+    - Header-only ROI: Only OCR top 250px where brand text appears
+    - RapidOCR: 30-50% faster than Tesseract with better accuracy
     """
     import time
 
     start_time = time.time()
 
-    # Check HWND cache first
+    # Import verification services
     from app.services.target_verifier import get_target_verifier, get_hwnd_cache
+    from app.services.page_hash_cache import get_fast_verification_with_hash
 
     hwnd_cache = get_hwnd_cache()
+    fast_verify_service = get_fast_verification_with_hash()
 
+    # =========================================
+    # TIER 1: Perceptual Hash Cache (instant)
+    # =========================================
+    # Check if this exact page was previously verified
+    try:
+        is_hash_match, hash_method = fast_verify_service.quick_verify(
+            image_base64=request.image_base64,
+            hwnd=request.hwnd,
+        )
+
+        if is_hash_match:
+            total_time = (time.time() - start_time) * 1000
+            logger.info(f"[FAST_VERIFY] Page hash MATCH in {total_time:.1f}ms - skipping OCR")
+            return FastVerifyResponse(
+                success=True,
+                is_verified=True,
+                matched_keywords=["(page cached)"],
+                confidence=1.0,
+                verification_time_ms=0.0,
+                ocr_time_ms=0.0,
+                total_time_ms=total_time,
+                hwnd_cached=False,
+                page_hash_cached=True,
+                verification_method="page_hash",
+                message="Target verified from page hash cache (previously visited page)",
+            )
+    except Exception as e:
+        logger.warning(f"[FAST_VERIFY] Page hash check failed: {e}")
+        # Continue to other verification methods
+
+    # =========================================
+    # TIER 2: HWND Cache (instant)
+    # =========================================
     if request.hwnd is not None and hwnd_cache.is_verified(request.hwnd):
-        logger.info(f"[FAST_VERIFY] HWND {request.hwnd} is cached as verified - skipping OCR")
+        total_time = (time.time() - start_time) * 1000
+        logger.info(f"[FAST_VERIFY] HWND {request.hwnd} cached - verified in {total_time:.1f}ms")
         return FastVerifyResponse(
             success=True,
             is_verified=True,
-            matched_keywords=["(cached)"],
+            matched_keywords=["(hwnd cached)"],
             confidence=1.0,
             verification_time_ms=0.0,
             ocr_time_ms=0.0,
-            total_time_ms=(time.time() - start_time) * 1000,
+            total_time_ms=total_time,
             hwnd_cached=True,
+            page_hash_cached=False,
+            verification_method="hwnd",
             message="Target verified from HWND cache",
         )
 
+    # =========================================
+    # TIER 3: Fast OCR Verification
+    # =========================================
     if not request.brand_keywords:
         return FastVerifyResponse(
             success=True,
@@ -1275,30 +1317,35 @@ async def fast_verify_target(
             ocr_time_ms=0.0,
             total_time_ms=(time.time() - start_time) * 1000,
             hwnd_cached=False,
+            page_hash_cached=False,
+            verification_method="none",
             message="No brand keywords configured - verification skipped",
         )
 
     try:
-        # Run OCR-only analysis (skip UI detection)
         from app.services.cv_service import get_cv_service
 
         cv_service = get_cv_service()
         ocr_start = time.time()
 
-        # Use the context engine's extract_text_only method
-        ocr_result = cv_service.context_engine.extract_text_only(
+        # Use header-only ROI for faster OCR (brand text is in header)
+        # RapidOCR/Windows OCR is ~200-400ms vs Tesseract ~500-700ms
+        ocr_result = cv_service.context_engine.extract_text_fast(
             request.image_base64,
-            resize=True
+            resize=True,
+            max_width=1280,
+            max_height=720,
+            use_header_roi=True,  # Only OCR top portion (where brand text is)
+            header_roi_height=250,  # Top 250 pixels
         )
 
         ocr_time = (time.time() - ocr_start) * 1000
-        logger.info(f"[FAST_VERIFY] OCR completed in {ocr_time:.0f}ms, found {len(ocr_result.text_regions)} text regions")
+        print(f"[FAST_VERIFY] OCR completed in {ocr_time:.0f}ms, found {len(ocr_result.text_regions)} text regions")
 
         # Run keyword verification
         verifier = get_target_verifier()
         verify_start = time.time()
 
-        # Convert OCR result to dict format for verifier
         text_regions_for_verify = [
             {"text": region.text}
             for region in ocr_result.text_regions
@@ -1314,16 +1361,25 @@ async def fast_verify_target(
         total_time = (time.time() - start_time) * 1000
 
         if verification_result.is_verified:
+            # Add this page to the hash cache for future instant verification
+            try:
+                fast_verify_service.add_verified_page(request.image_base64)
+            except Exception as e:
+                logger.warning(f"[FAST_VERIFY] Failed to cache page hash: {e}")
+
+            # Print prominent message to console
+            print(f"\n{'='*60}")
+            print(f"✓ TARGET VERIFIED in {total_time:.0f}ms")
+            print(f"  Matched keywords: {verification_result.matched_keywords}")
+            print(f"{'='*60}\n")
+
             logger.info(
-                f"[FAST_VERIFY] Target VERIFIED in {total_time:.0f}ms. "
+                f"[FAST_VERIFY] Target VERIFIED via OCR in {total_time:.0f}ms. "
                 f"Matched: {verification_result.matched_keywords}"
             )
-            message = f"Target verified! Matched keywords: {', '.join(verification_result.matched_keywords)}"
+            message = f"Target verified! Matched: {', '.join(verification_result.matched_keywords)}"
         else:
-            logger.info(
-                f"[FAST_VERIFY] Target NOT verified in {total_time:.0f}ms. "
-                f"Looking for: {request.brand_keywords}"
-            )
+            print(f"[FAST_VERIFY] Target NOT verified in {total_time:.0f}ms. Looking for: {request.brand_keywords}")
             message = f"Target not verified. Looking for: {', '.join(request.brand_keywords)}"
 
         return FastVerifyResponse(
@@ -1335,6 +1391,8 @@ async def fast_verify_target(
             ocr_time_ms=ocr_time,
             total_time_ms=total_time,
             hwnd_cached=request.hwnd is not None and verification_result.is_verified,
+            page_hash_cached=False,
+            verification_method="ocr",
             message=message,
         )
 
@@ -1349,12 +1407,14 @@ async def fast_verify_target(
             ocr_time_ms=0.0,
             total_time_ms=(time.time() - start_time) * 1000,
             hwnd_cached=False,
+            page_hash_cached=False,
+            verification_method="error",
             message=f"Verification failed: {str(e)}",
         )
 
 
 # =============================================
-# Fast Position Update (OCR-only, for scroll)
+# Fast Position Update (Scroll Offset Detection)
 # =============================================
 
 @router.post("/update-position", response_model=FastPositionUpdateResponse)
@@ -1363,129 +1423,391 @@ async def fast_position_update(
     current_user: User = Depends(get_current_user),
 ):
     """
-    Fast halo position update using OCR-only (for scroll handling).
+    Fast halo position update using scroll offset detection.
 
-    This endpoint is designed for quick position updates when user scrolls:
-    1. Runs ONLY OCR on the screenshot (skips slow OmniParser detection)
-    2. Finds the target label text in OCR results
-    3. Returns the new bounding box position
+    This endpoint is optimized for quick position updates when user scrolls:
+    1. Compares current screenshot with stored reference image
+    2. Detects scroll offset using template matching (~10-50ms)
+    3. Applies offset to known bounding box
 
-    Much faster than full CV analysis (~5-10 seconds vs ~50 seconds).
-    Use this for scroll updates, use full CV only for step changes.
+    Much faster than OCR-based detection (~10-50ms vs ~500-2000ms).
+    Falls back to storing reference if no previous reference exists.
+
+    The reference image is stored after each full CV analysis.
     """
     import time
-    from difflib import SequenceMatcher
+    import base64
+    import cv2
+    import numpy as np
+
+    from cv_pipeline.scroll_detector import get_scroll_detector, apply_scroll_offset_to_bbox
+    from app.services.reference_store import get_reference_store
 
     start_time = time.time()
 
-    if not request.target_label:
+    # Use session_id if provided, otherwise use target_label as fallback key
+    reference_key = request.session_id or f"label:{request.target_label}"
+
+    logger.info(f"[SCROLL_DETECT] Request: session_id={request.session_id}, has_bbox={request.current_bbox is not None}, ref_key={reference_key}")
+
+    if not request.current_bbox:
+        # No current bbox - we need full CV first to establish position
+        # Store this image as reference for future comparisons
+        reference_store = get_reference_store()
+        reference_store.set_reference(
+            session_id=reference_key,
+            image_base64=request.image_base64,
+            bbox=None,
+            target_label=request.target_label,
+        )
+
         return FastPositionUpdateResponse(
-            success=False,
+            success=True,
             found=False,
             new_bbox=None,
             confidence=0.0,
-            ocr_time_ms=0.0,
+            scroll_offset_y=0,
+            detection_method="none",
+            processing_time_ms=0.0,
             total_time_ms=(time.time() - start_time) * 1000,
-            message="No target label provided",
+            message="No current bbox - need full CV to establish position. Reference stored.",
+            reference_stored=True,
         )
 
     try:
-        # Run OCR-only analysis
-        from app.services.cv_service import get_cv_service
+        # Get reference store
+        reference_store = get_reference_store()
+        reference = reference_store.get_reference(reference_key)
 
-        cv_service = get_cv_service()
-        ocr_start = time.time()
+        # Decode current image
+        image_data = base64.b64decode(request.image_base64)
+        np_arr = np.frombuffer(image_data, np.uint8)
+        current_image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
 
-        ocr_result = cv_service.context_engine.extract_text_only(
-            request.image_base64,
-            resize=True
-        )
-
-        ocr_time = (time.time() - ocr_start) * 1000
-        logger.info(f"[FAST_POSITION] OCR completed in {ocr_time:.0f}ms, found {len(ocr_result.text_regions)} text regions")
-
-        # Find the target label in OCR results
-        target_label_lower = request.target_label.lower().strip()
-        best_match = None
-        best_score = 0.0
-
-        for region in ocr_result.text_regions:
-            region_text_lower = region.text.lower().strip()
-
-            # Exact match
-            if target_label_lower in region_text_lower or region_text_lower in target_label_lower:
-                score = 1.0 if target_label_lower == region_text_lower else 0.9
-            else:
-                # Fuzzy match
-                score = SequenceMatcher(None, target_label_lower, region_text_lower).ratio()
-
-            # If we have a current bbox, prefer matches near it (for scroll handling)
-            if request.current_bbox and score > 0.5:
-                # Calculate distance from current position
-                region_center_x = (region.bbox[0] + region.bbox[2]) / 2
-                region_center_y = (region.bbox[1] + region.bbox[3]) / 2
-                current_center_x = (request.current_bbox.x1 + request.current_bbox.x2) / 2
-                current_center_y = (request.current_bbox.y1 + request.current_bbox.y2) / 2
-
-                # Horizontal distance matters more (scroll is vertical)
-                h_dist = abs(region_center_x - current_center_x)
-                v_dist = abs(region_center_y - current_center_y)
-
-                # Prefer matches that are horizontally close (same column)
-                if h_dist < 100:  # Within 100 pixels horizontally
-                    score += 0.2
-                elif h_dist < 200:
-                    score += 0.1
-
-            if score > best_score:
-                best_score = score
-                best_match = region
-
-        if best_match and best_score >= 0.6:
-            new_bbox = BoundingBox(
-                x1=int(best_match.bbox[0]),
-                y1=int(best_match.bbox[1]),
-                x2=int(best_match.bbox[2]),
-                y2=int(best_match.bbox[3]),
+        if current_image is None:
+            return FastPositionUpdateResponse(
+                success=False,
+                found=False,
+                new_bbox=None,
+                confidence=0.0,
+                scroll_offset_y=0,
+                detection_method="none",
+                processing_time_ms=0.0,
+                total_time_ms=(time.time() - start_time) * 1000,
+                message="Failed to decode current image",
+                reference_stored=False,
             )
 
-            total_time = (time.time() - start_time) * 1000
-            logger.info(
-                f"[FAST_POSITION] Found '{request.target_label}' at ({new_bbox.x1}, {new_bbox.y1}) "
-                f"with confidence {best_score:.2f} in {total_time:.0f}ms"
+        # If no reference exists, store current and return
+        if reference is None:
+            reference_store.set_reference(
+                session_id=reference_key,
+                image_base64=request.image_base64,
+                bbox={
+                    'x1': request.current_bbox.x1,
+                    'y1': request.current_bbox.y1,
+                    'x2': request.current_bbox.x2,
+                    'y2': request.current_bbox.y2,
+                },
+                target_label=request.target_label,
             )
+
+            logger.info(f"[SCROLL_DETECT] No reference for {reference_key}, stored current image")
 
             return FastPositionUpdateResponse(
                 success=True,
                 found=True,
-                new_bbox=new_bbox,
-                confidence=best_score,
-                ocr_time_ms=ocr_time,
-                total_time_ms=total_time,
-                message=f"Found target at new position",
+                new_bbox=request.current_bbox,  # Return same bbox
+                confidence=1.0,
+                scroll_offset_y=0,
+                detection_method="none",
+                processing_time_ms=0.0,
+                total_time_ms=(time.time() - start_time) * 1000,
+                message="Reference stored. Position unchanged.",
+                reference_stored=True,
             )
+
+        # Try scroll offset detection
+        scroll_detector = get_scroll_detector()
+        detect_start = time.time()
+
+        scroll_result = scroll_detector.detect_scroll_offset(
+            reference_image=reference.image,
+            current_image=current_image,
+        )
+
+        detect_time = (time.time() - detect_start) * 1000
+        logger.info(
+            f"[SCROLL_DETECT] Offset detection: {scroll_result.scroll_offset_y}px, "
+            f"confidence: {scroll_result.confidence:.2f}, time: {detect_time:.0f}ms"
+        )
+
+        if scroll_result.success:
+            # Apply scroll offset to current bbox
+            current_bbox_dict = {
+                'x1': request.current_bbox.x1,
+                'y1': request.current_bbox.y1,
+                'x2': request.current_bbox.x2,
+                'y2': request.current_bbox.y2,
+            }
+
+            new_bbox_dict, is_visible = apply_scroll_offset_to_bbox(
+                bbox=current_bbox_dict,
+                scroll_offset_y=scroll_result.scroll_offset_y,
+                scroll_offset_x=scroll_result.scroll_offset_x,
+                image_height=current_image.shape[0],
+                image_width=current_image.shape[1],
+            )
+
+            # IMPORTANT: Only update reference image when actual scroll is detected
+            # If scroll_offset is 0, keep the current reference to detect future scrolls
+            # This prevents the reference from being prematurely updated by minor screen changes
+            if scroll_result.scroll_offset_y != 0 or scroll_result.scroll_offset_x != 0:
+                reference_store.update_reference_image(reference_key, request.image_base64)
+                logger.info(f"[SCROLL_DETECT] Reference updated after scroll offset: {scroll_result.scroll_offset_y}px")
+
+            if is_visible and new_bbox_dict:
+                new_bbox = BoundingBox(
+                    x1=int(new_bbox_dict['x1']),
+                    y1=int(new_bbox_dict['y1']),
+                    x2=int(new_bbox_dict['x2']),
+                    y2=int(new_bbox_dict['y2']),
+                )
+
+                # Also update the stored bbox
+                reference_store.update_bbox(reference_key, new_bbox_dict)
+
+                total_time = (time.time() - start_time) * 1000
+                logger.info(
+                    f"[SCROLL_DETECT] Success: scroll={scroll_result.scroll_offset_y}px, "
+                    f"new_y={new_bbox.y1}, total_time={total_time:.0f}ms"
+                )
+
+                return FastPositionUpdateResponse(
+                    success=True,
+                    found=True,
+                    new_bbox=new_bbox,
+                    confidence=scroll_result.confidence,
+                    scroll_offset_y=scroll_result.scroll_offset_y,
+                    detection_method="scroll_offset",
+                    processing_time_ms=detect_time,
+                    total_time_ms=total_time,
+                    message=f"Scroll detected: {scroll_result.scroll_offset_y}px",
+                    reference_stored=True,
+                )
+            else:
+                # Element scrolled off screen
+                total_time = (time.time() - start_time) * 1000
+                logger.info(f"[SCROLL_DETECT] Element scrolled off screen")
+
+                return FastPositionUpdateResponse(
+                    success=True,
+                    found=False,
+                    new_bbox=None,
+                    confidence=scroll_result.confidence,
+                    scroll_offset_y=scroll_result.scroll_offset_y,
+                    detection_method="scroll_offset",
+                    processing_time_ms=detect_time,
+                    total_time_ms=total_time,
+                    message="Element scrolled off screen",
+                    reference_stored=True,
+                )
+
         else:
+            # Scroll detection failed - content likely changed significantly
+            # Store new reference for future comparisons
+            reference_store.set_reference(
+                session_id=reference_key,
+                image_base64=request.image_base64,
+                bbox={
+                    'x1': request.current_bbox.x1,
+                    'y1': request.current_bbox.y1,
+                    'x2': request.current_bbox.x2,
+                    'y2': request.current_bbox.y2,
+                },
+                target_label=request.target_label,
+            )
+
             total_time = (time.time() - start_time) * 1000
-            logger.info(f"[FAST_POSITION] Target '{request.target_label}' not found in {total_time:.0f}ms")
+            logger.info(
+                f"[SCROLL_DETECT] Detection failed ({scroll_result.message}), "
+                f"stored new reference. Needs full CV."
+            )
 
             return FastPositionUpdateResponse(
                 success=True,
                 found=False,
                 new_bbox=None,
-                confidence=best_score,
-                ocr_time_ms=ocr_time,
+                confidence=scroll_result.confidence,
+                scroll_offset_y=0,
+                detection_method="none",
+                processing_time_ms=detect_time,
                 total_time_ms=total_time,
-                message=f"Target not found (best match score: {best_score:.2f})",
+                message=f"Content changed significantly. {scroll_result.message}. New reference stored.",
+                reference_stored=True,
             )
 
     except Exception as e:
-        logger.error(f"[FAST_POSITION] Error: {e}")
+        logger.error(f"[SCROLL_DETECT] Error: {e}", exc_info=True)
         return FastPositionUpdateResponse(
             success=False,
             found=False,
             new_bbox=None,
             confidence=0.0,
-            ocr_time_ms=0.0,
+            scroll_offset_y=0,
+            detection_method="none",
+            processing_time_ms=0.0,
             total_time_ms=(time.time() - start_time) * 1000,
             message=f"Position update failed: {str(e)}",
+            reference_stored=False,
+        )
+
+
+# =============================================
+# Browser URL Detection (Python-based)
+# =============================================
+
+from pydantic import BaseModel, Field
+
+
+class BrowserUrlRequest(BaseModel):
+    """Request to find browser with matching URL patterns."""
+    url_patterns: List[str] = Field(..., description="URL patterns to match (e.g., ['rs-online.com'])")
+
+
+class BrowserInfo(BaseModel):
+    """Information about a browser window."""
+    hwnd: int = Field(..., description="Window handle")
+    title: str = Field(..., description="Window title")
+    process_name: str = Field(..., description="Process name (e.g., msedge.exe)")
+    url: Optional[str] = Field(None, description="Extracted URL from address bar")
+    domain: Optional[str] = Field(None, description="Domain extracted from URL")
+
+
+class BrowserUrlResponse(BaseModel):
+    """Response from browser URL detection."""
+    success: bool = True
+    found: bool = False
+    browser: Optional[BrowserInfo] = None
+    matched_pattern: Optional[str] = None
+    all_browsers: List[BrowserInfo] = Field(default_factory=list)
+    message: str = ""
+    detection_time_ms: float = 0.0
+
+
+@router.post("/detect-browser", response_model=BrowserUrlResponse)
+async def detect_browser_with_url(
+    request: BrowserUrlRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Detect a browser window matching the given URL patterns.
+
+    This uses Python's pywinauto library to extract URLs from browser
+    address bars via Windows UI Automation. More reliable than the
+    Rust-based implementation.
+
+    The endpoint searches all open browser windows and returns the first
+    one whose URL matches any of the provided patterns.
+    """
+    import time
+
+    start_time = time.time()
+
+    try:
+        from cv_pipeline.browser_url_extractor import (
+            find_browser_with_url_pattern,
+            find_all_browser_windows,
+            get_browser_url_pywinauto,
+            url_matches_pattern,
+        )
+
+        logger.info(f"[BROWSER_DETECT] Searching for URL patterns: {request.url_patterns}")
+
+        # Find all browsers first (for debugging/listing)
+        all_browsers_raw = find_all_browser_windows()
+        all_browsers = []
+
+        for b in all_browsers_raw:
+            # Extract URL for each browser
+            url = get_browser_url_pywinauto(b["hwnd"])
+            browser_info = BrowserInfo(
+                hwnd=b["hwnd"],
+                title=b["title"],
+                process_name=b["process_name"],
+                url=url,
+                domain=None,
+            )
+            if url:
+                from cv_pipeline.browser_url_extractor import extract_domain
+                browser_info.domain = extract_domain(url)
+            all_browsers.append(browser_info)
+
+        detection_time = (time.time() - start_time) * 1000
+
+        # Try to find a matching browser
+        result = find_browser_with_url_pattern(request.url_patterns)
+
+        if result:
+            matched_browser = BrowserInfo(
+                hwnd=result["hwnd"],
+                title=result["title"],
+                process_name=result["process_name"],
+                url=result.get("url"),
+                domain=result.get("domain"),
+            )
+
+            # Find which pattern matched
+            matched_pattern = None
+            if result.get("url"):
+                for pattern in request.url_patterns:
+                    if url_matches_pattern(result["url"], pattern):
+                        matched_pattern = pattern
+                        break
+
+            logger.info(f"[BROWSER_DETECT] Found matching browser: {result['title'][:50]}...")
+
+            return BrowserUrlResponse(
+                success=True,
+                found=True,
+                browser=matched_browser,
+                matched_pattern=matched_pattern,
+                all_browsers=all_browsers,
+                message=f"Found browser matching URL pattern",
+                detection_time_ms=detection_time,
+            )
+
+        logger.info(f"[BROWSER_DETECT] No browser found matching patterns. {len(all_browsers)} browsers checked.")
+
+        return BrowserUrlResponse(
+            success=True,
+            found=False,
+            browser=None,
+            matched_pattern=None,
+            all_browsers=all_browsers,
+            message=f"No browser found matching URL patterns. {len(all_browsers)} browsers checked.",
+            detection_time_ms=detection_time,
+        )
+
+    except ImportError as e:
+        logger.error(f"[BROWSER_DETECT] pywinauto not available: {e}")
+        return BrowserUrlResponse(
+            success=False,
+            found=False,
+            browser=None,
+            matched_pattern=None,
+            all_browsers=[],
+            message=f"Browser detection not available: pywinauto not installed",
+            detection_time_ms=(time.time() - start_time) * 1000,
+        )
+    except Exception as e:
+        logger.error(f"[BROWSER_DETECT] Error: {e}", exc_info=True)
+        return BrowserUrlResponse(
+            success=False,
+            found=False,
+            browser=None,
+            matched_pattern=None,
+            all_browsers=[],
+            message=f"Browser detection failed: {str(e)}",
+            detection_time_ms=(time.time() - start_time) * 1000,
         )

@@ -158,6 +158,46 @@ pub fn capture_window_by_title(title_pattern: &str) -> Result<CaptureResult, Scr
     })
 }
 
+/// Captures a specific window by its HWND (window handle).
+///
+/// This is more reliable than title matching when the HWND is known,
+/// as it doesn't require string pattern matching.
+pub fn capture_window_by_hwnd(hwnd: isize) -> Result<CaptureResult, ScreenshotError> {
+    let windows = Window::all()
+        .map_err(|e| ScreenshotError::CaptureFailed(format!("Failed to enumerate windows: {}", e)))?;
+
+    // Find window matching the HWND
+    let target_window = windows
+        .into_iter()
+        .find(|w| w.id() as isize == hwnd)
+        .ok_or_else(|| ScreenshotError::CaptureFailed(format!("No window with HWND {} found", hwnd)))?;
+
+    let window_name = target_window.title().to_string();
+
+    // Capture the window
+    let image = target_window.capture_image()
+        .map_err(|e| ScreenshotError::CaptureFailed(format!("Failed to capture window '{}': {}", window_name, e)))?;
+
+    let width = image.width();
+    let height = image.height();
+
+    // Convert to PNG bytes
+    let dynamic_image = DynamicImage::ImageRgba8(image);
+    let mut buffer = Cursor::new(Vec::new());
+    dynamic_image.write_to(&mut buffer, ImageFormat::Png)
+        .map_err(|e| ScreenshotError::EncodingFailed(e.to_string()))?;
+
+    // Encode to Base64
+    let image_base64 = BASE64.encode(buffer.into_inner());
+
+    Ok(CaptureResult {
+        image_base64,
+        width,
+        height,
+        monitor_name: window_name, // Use window title instead of monitor name
+    })
+}
+
 /// Captures a specific region of the screen.
 ///
 /// Coordinates are in screen pixels.

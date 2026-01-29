@@ -239,3 +239,18 @@ def get_cv_service() -> CVService:
     if _cv_service is None:
         _cv_service = CVService()
     return _cv_service
+
+
+def reset_cv_service() -> None:
+    """
+    Reset the CV service instance, forcing reinitialization.
+
+    Call this when settings change and you need the CV service
+    to pick up new configuration (e.g., switching OCR backends).
+    """
+    global _cv_service
+    if _cv_service is not None:
+        print("[CVService] Resetting CV service instance...")
+        _cv_service._context_engine = None
+        _cv_service = None
+    print("[CVService] CV service will be reinitialized on next use")

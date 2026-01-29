@@ -89,6 +89,17 @@ export async function captureWindow(titlePattern: string): Promise<CaptureRespon
 }
 
 /**
+ * Captures a specific window by its HWND (window handle).
+ * This is more efficient than title matching when the HWND is already known,
+ * such as after a successful URL-based browser detection.
+ */
+export async function captureWindowByHwnd(hwnd: number): Promise<CaptureResponse> {
+  return invoke<CaptureResponse>('capture_window_by_hwnd', {
+    hwnd,
+  });
+}
+
+/**
  * Gets the title of the currently active window.
  */
 export async function getActiveWindowTitle(): Promise<WindowInfo> {
@@ -181,6 +192,8 @@ export interface SmartMatchResult {
   window_info: ExtendedWindowInfo | null;
   matched_pattern: string | null;
   debug_info: SmartMatchDebugInfo;
+  /** Window handle for caching (available when matched) */
+  hwnd: number | null;
 }
 
 /**
