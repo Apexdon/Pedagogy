@@ -80,6 +80,10 @@ pytesseract>=0.3.10
 # Windows OCR - Native Windows 10+ OCR API (fastest ~50-200ms)
 # winocr>=0.0.7  # Optional - uncomment if Windows 10+ and want faster verification
 
+# Google Cloud Vision OCR - Cloud-based OCR (~2-5s, high accuracy)
+# Requires GOOGLE_CLOUD_API_KEY in .env
+google-cloud-vision>=3.5.0
+
 # Perceptual hashing for fast page verification
 imagehash>=4.3.0
 

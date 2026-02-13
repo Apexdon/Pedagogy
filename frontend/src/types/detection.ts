@@ -172,3 +172,49 @@ export interface CVHealthResponse {
     max_height: number;
   };
 }
+
+// =============================================
+// Diagnostic Types
+// =============================================
+
+export interface DiagnosticRequest {
+  image: string;
+  resize?: boolean;
+  run_ocr?: boolean;
+  run_detection?: boolean;
+}
+
+export interface TimingStep {
+  name: string;
+  start_ms: number;
+  end_ms: number;
+  duration_ms: number;
+  details: Record<string, unknown>;
+}
+
+export interface OCRDiagnosticResult {
+  total_time_ms: number;
+  text_region_count: number;
+  timing_steps: TimingStep[];
+  text_regions: TextRegion[];
+  engine_info: Record<string, unknown>;
+}
+
+export interface DetectionDiagnosticResult {
+  total_time_ms: number;
+  element_count: number;
+  timing_steps: TimingStep[];
+  elements: UIElement[];
+  model_info: Record<string, unknown>;
+}
+
+export interface DiagnosticResponse {
+  analysis_id: string;
+  timestamp: string;
+  image_size: ImageSize;
+  total_time_ms: number;
+  preprocessing_time_ms: number;
+  ocr_result: OCRDiagnosticResult | null;
+  detection_result: DetectionDiagnosticResult | null;
+  summary: Record<string, unknown>;
+}

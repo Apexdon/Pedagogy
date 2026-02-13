@@ -434,3 +434,158 @@ html, body, #panel-root {
 .instruction-section::-webkit-scrollbar-thumb:hover {
   background: rgba(255, 255, 255, 0.2);
 }
+
+/* Timing section */
+.timing-section {
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.timing-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  background: rgba(0, 0, 0, 0.15);
+  border: none;
+  color: #94a3b8;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.timing-toggle:hover {
+  background: rgba(0, 0, 0, 0.25);
+  color: #f1f5f9;
+}
+
+.timing-icon {
+  font-size: 14px;
+}
+
+.toggle-arrow {
+  margin-left: auto;
+  font-size: 10px;
+  transition: transform 0.2s;
+}
+
+.timing-details {
+  padding: 8px 16px 12px;
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.timing-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 4px 0;
+  font-size: 11px;
+}
+
+.timing-label {
+  color: #64748b;
+}
+
+.timing-value {
+  color: #93c5fd;
+  font-weight: 500;
+  font-family: 'Monaco', 'Menlo', monospace;
+}
+
+.timing-divider {
+  height: 1px;
+  background: rgba(255, 255, 255, 0.1);
+  margin: 6px 0;
+}
+
+.timing-row.timing-sub {
+  padding-left: 12px;
+}
+
+.timing-row.timing-sub .timing-label {
+  color: #94a3b8;
+}
+
+/* Detection/Region timing expandable sections */
+.region-timing-section {
+  margin: 2px 0;
+}
+
+.region-timing-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 0 4px 12px;
+  background: transparent;
+  border: none;
+  color: #94a3b8;
+  font-size: 11px;
+  cursor: pointer;
+  transition: color 0.2s;
+}
+
+.region-timing-toggle:hover {
+  color: #f1f5f9;
+}
+
+.detection-timing-list,
+.region-timing-list {
+  margin-left: 16px;
+  padding-left: 8px;
+  border-left: 2px solid rgba(255, 255, 255, 0.1);
+}
+
+.region-timing-item {
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 4px;
+  padding: 6px 8px;
+  margin: 4px 0;
+  font-size: 10px;
+}
+
+.region-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.region-index {
+  font-weight: 600;
+  color: #cbd5e1;
+}
+
+.region-text {
+  color: #94a3b8;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.region-total {
+  color: #93c5fd;
+  font-weight: 500;
+  font-family: 'Monaco', 'Menlo', monospace;
+}
+
+.region-details {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #64748b;
+  font-size: 10px;
+}
+
+.region-size {
+  color: #94a3b8;
+}
+
+.region-breakdown {
+  font-family: 'Monaco', 'Menlo', monospace;
+}
+
+.region-conf {
+  color: #86efac;
+}

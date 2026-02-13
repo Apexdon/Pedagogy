@@ -68,6 +68,19 @@ pub struct SessionStartedPayload {
     pub application_context: Option<String>,
 }
 
+/// Timing breakdown for CV analysis performance display
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TimingBreakdown {
+    pub total_ms: f64,
+    pub preprocessing_ms: f64,
+    pub detection_ms: f64,
+    pub ocr_ms: f64,
+    pub matching_ms: f64,
+    pub verification_ms: f64,
+    pub element_count: i32,
+    pub text_region_count: i32,
+}
+
 /// Payload for step changed event
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StepChangedPayload {
@@ -78,6 +91,7 @@ pub struct StepChangedPayload {
     pub action_type: String,
     pub target_label: Option<String>,
     pub confidence: Option<f32>,
+    pub timing: Option<TimingBreakdown>,
 }
 
 /// Payload for session ended event

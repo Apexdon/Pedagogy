@@ -47,6 +47,7 @@ import type {
   TargetAppSettings,
   CaptureStepResponse,
   TargetApplication,
+  TimingBreakdown,
 } from '../types/guidance';
 import type { WindowPattern } from '../types/detection';
 import type { BoundingBox } from '../overlay/types';
@@ -78,6 +79,8 @@ export interface CoordinatorState {
   lastUpdateTime: number;
   /** Cached HWND of matched browser window (for URL-based matching) */
   matchedBrowserHwnd: number | null;
+  /** Timing breakdown from last CV analysis */
+  lastTiming: TimingBreakdown | null;
 }
 
 export interface CoordinatorConfig {
@@ -163,6 +166,7 @@ class GuidanceCoordinator {
       error: null,
       lastUpdateTime: Date.now(),
       matchedBrowserHwnd: null,
+      lastTiming: null,
     };
 
     this.eventListeners = new Map();
@@ -424,7 +428,8 @@ class GuidanceCoordinator {
       step.detailed_instruction || null,
       step.action_type || 'click',
       step.target?.label || null,
-      this.state.currentTarget?.confidence || null
+      this.state.currentTarget?.confidence || null,
+      this.state.lastTiming
     );
   }
 
@@ -1413,8 +1418,17 @@ class GuidanceCoordinator {
     };
 
     console.log('showTargetHalo - bounds:', bounds, 'target:', target);
+    console.log('showTargetHalo - captureResult.timing:', captureResult.timing);
 
     this.state.currentTarget = target;
+    // Store timing for side panel display
+    this.state.lastTiming = captureResult.timing || null;
+    console.log('showTargetHalo - stored lastTiming:', this.state.lastTiming);
+
+    // Update side panel with timing info
+    if (this.state.currentStep) {
+      await this.updateSidePanel(this.state.currentStep);
+    }
 
     // Show or update halo
     if (this.config.showHaloOnStepChange) {

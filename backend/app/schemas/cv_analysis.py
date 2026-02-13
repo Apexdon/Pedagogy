@@ -198,6 +198,69 @@ class CVHealthResponse(BaseModel):
     ocr_engine: Dict[str, Any] = Field(..., description="OCR engine status")
     preprocessor: Dict[str, Any] = Field(..., description="Preprocessor configuration")
 
+
+# =============================================
+# Diagnostic Schemas
+# =============================================
+
+class DiagnosticRequest(BaseModel):
+    """Request for CV pipeline diagnostic analysis."""
+    image: str = Field(
+        ...,
+        description="Base64 encoded image (with or without data URI prefix)"
+    )
+    resize: bool = Field(
+        default=True,
+        description="Whether to resize large images for faster processing"
+    )
+    run_ocr: bool = Field(
+        default=True,
+        description="Whether to run OCR text extraction"
+    )
+    run_detection: bool = Field(
+        default=True,
+        description="Whether to run UI element detection"
+    )
+
+
+class TimingStep(BaseModel):
+    """A single timing step in the pipeline."""
+    name: str = Field(..., description="Step name")
+    start_ms: float = Field(..., description="Start time in ms from analysis start")
+    end_ms: float = Field(..., description="End time in ms from analysis start")
+    duration_ms: float = Field(..., description="Duration in milliseconds")
+    details: Dict[str, Any] = Field(default_factory=dict, description="Additional details")
+
+
+class OCRDiagnosticResult(BaseModel):
+    """Detailed OCR diagnostic results."""
+    total_time_ms: float = Field(..., description="Total OCR processing time")
+    text_region_count: int = Field(..., description="Number of text regions found")
+    timing_steps: List[TimingStep] = Field(default_factory=list, description="Detailed timing breakdown")
+    text_regions: List[TextRegionSchema] = Field(default_factory=list, description="Extracted text regions")
+    engine_info: Dict[str, Any] = Field(default_factory=dict, description="OCR engine information")
+
+
+class DetectionDiagnosticResult(BaseModel):
+    """Detailed UI detection diagnostic results."""
+    total_time_ms: float = Field(..., description="Total detection processing time")
+    element_count: int = Field(..., description="Number of UI elements found")
+    timing_steps: List[TimingStep] = Field(default_factory=list, description="Detailed timing breakdown")
+    elements: List[UIElementSchema] = Field(default_factory=list, description="Detected UI elements")
+    model_info: Dict[str, Any] = Field(default_factory=dict, description="Model information")
+
+
+class DiagnosticResponse(BaseModel):
+    """Full diagnostic analysis response."""
+    analysis_id: str = Field(..., description="Unique analysis identifier")
+    timestamp: datetime = Field(..., description="Analysis timestamp")
+    image_size: ImageSizeSchema = Field(..., description="Original image dimensions")
+    total_time_ms: float = Field(..., description="Total analysis time")
+    preprocessing_time_ms: float = Field(..., description="Image preprocessing time")
+    ocr_result: Optional[OCRDiagnosticResult] = Field(None, description="OCR diagnostic results")
+    detection_result: Optional[DetectionDiagnosticResult] = Field(None, description="Detection diagnostic results")
+    summary: Dict[str, Any] = Field(default_factory=dict, description="Analysis summary")
+
     class Config:
         json_schema_extra = {
             "example": {

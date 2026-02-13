@@ -209,6 +209,44 @@ class DetectedElement(BaseModel):
     metadata: Dict[str, Any] = {}
 
 
+class RecognitionRegionTiming(BaseModel):
+    """Per-region timing breakdown for OCR text recognition diagnostic."""
+    region_index: int
+    crop_width: int
+    crop_height: int
+    preprocess_ms: float
+    inference_ms: float
+    decode_ms: float
+    total_ms: float
+    text: str  # Recognized text (truncated for display)
+    confidence: float
+
+
+class DetectionTiming(BaseModel):
+    """Per-phase timing breakdown for UI element detection (from Ultralytics/YOLO)."""
+    preprocess_ms: float = 0.0  # Image preprocessing (resize, normalize)
+    inference_ms: float = 0.0   # Neural network forward pass
+    postprocess_ms: float = 0.0  # NMS, box filtering, etc.
+    total_ms: float = 0.0       # Sum of all phases
+
+
+class TimingBreakdown(BaseModel):
+    """Detailed timing breakdown for CV analysis."""
+    total_ms: float = 0.0
+    preprocessing_ms: float = 0.0
+    detection_ms: float = 0.0  # UI element detection (OmniParser/YOLO)
+    detection_timing: Optional[DetectionTiming] = None  # Per-phase detection breakdown
+    ocr_ms: float = 0.0  # Total OCR time
+    ocr_detection_ms: float = 0.0  # Text detection phase within OCR
+    ocr_recognition_ms: float = 0.0  # Text recognition phase within OCR
+    matching_ms: float = 0.0
+    verification_ms: float = 0.0
+    element_count: int = 0
+    text_region_count: int = 0
+    # Per-region timing breakdown (only populated in diagnostic mode)
+    region_timings: Optional[List[RecognitionRegionTiming]] = None
+
+
 class CaptureStepResponse(BaseModel):
     """Response from step capture with matched target."""
     success: bool
@@ -226,6 +264,8 @@ class CaptureStepResponse(BaseModel):
     target_verified: bool = True  # Whether target app was verified via brand keywords
     verification_keywords_matched: List[str] = []  # Which keywords were found
     hwnd_cached: bool = False  # Whether HWND was cached for future quick checks
+    # Timing breakdown for performance analysis
+    timing: Optional[TimingBreakdown] = None
 
 
 class StartGuidanceRequest(BaseModel):

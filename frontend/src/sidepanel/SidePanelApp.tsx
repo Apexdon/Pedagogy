@@ -10,6 +10,7 @@ import type {
   SessionEndedPayload,
   StateChangedPayload,
   CoordinatorStatusPayload,
+  TimingBreakdown,
 } from './types';
 import { PANEL_EVENTS } from './types';
 
@@ -28,6 +29,7 @@ interface CurrentStep {
   actionType: string;
   targetLabel: string | null;
   confidence: number | null;
+  timing?: TimingBreakdown | null;
 }
 
 interface CoordinatorStatus {
@@ -89,6 +91,7 @@ export const SidePanelApp: React.FC = () => {
           actionType: event.payload.action_type,
           targetLabel: event.payload.target_label,
           confidence: event.payload.confidence,
+          timing: event.payload.timing,
         });
       }
     );

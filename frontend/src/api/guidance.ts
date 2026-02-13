@@ -205,6 +205,7 @@ export const captureStep = async (
     `/guidance/sessions/${sessionId}/capture`,
     payload
   );
+  console.log('[captureStep] API response timing:', response.data.timing);
   return response.data;
 };
 

@@ -18,6 +18,39 @@ export interface SessionStartedPayload {
   application_context: string | null;
 }
 
+/**
+ * Per-region timing breakdown for OCR text recognition diagnostic.
+ */
+export interface RecognitionRegionTiming {
+  region_index: number;
+  crop_width: number;
+  crop_height: number;
+  preprocess_ms: number;
+  inference_ms: number;
+  decode_ms: number;
+  total_ms: number;
+  text: string;  // Recognized text (truncated for display)
+  confidence: number;
+}
+
+/**
+ * Timing breakdown for CV analysis performance display.
+ */
+export interface TimingBreakdown {
+  total_ms: number;
+  preprocessing_ms: number;
+  detection_ms: number;  // UI element detection (OmniParser/YOLO)
+  ocr_ms: number;  // Total OCR time
+  ocr_detection_ms: number;  // Text detection phase within OCR
+  ocr_recognition_ms: number;  // Text recognition phase within OCR
+  matching_ms: number;
+  verification_ms: number;
+  element_count: number;
+  text_region_count: number;
+  // Per-region timing breakdown (only populated in diagnostic mode)
+  region_timings?: RecognitionRegionTiming[] | null;
+}
+
 export interface StepChangedPayload {
   step_number: number;
   total_steps: number;
@@ -26,6 +59,8 @@ export interface StepChangedPayload {
   action_type: string;
   target_label: string | null;
   confidence: number | null;
+  // Timing breakdown for performance analysis
+  timing?: TimingBreakdown | null;
 }
 
 export interface SessionEndedPayload {

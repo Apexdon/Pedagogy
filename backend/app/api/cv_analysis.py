@@ -15,7 +15,9 @@ from app.schemas.cv_analysis import (
     ScreenStateResponse,
     DetectUIResponse,
     ExtractTextResponse,
-    CVHealthResponse
+    CVHealthResponse,
+    DiagnosticRequest,
+    DiagnosticResponse
 )
 
 router = APIRouter(prefix="/capture", tags=["Computer Vision"])
@@ -135,6 +137,48 @@ async def get_cv_health(
     - Preprocessor (settings)
     """
     return await cv_service.get_health_status()
+
+
+@router.post(
+    "/diagnostic",
+    response_model=DiagnosticResponse,
+    summary="Run CV pipeline diagnostic",
+    description="Run diagnostic analysis with detailed timing breakdown for OCR and UI detection"
+)
+async def run_diagnostic(
+    request: DiagnosticRequest,
+    cv_service: Annotated[CVService, Depends(get_cv_service)]
+) -> DiagnosticResponse:
+    """
+    Run diagnostic analysis with detailed timing breakdown.
+
+    This endpoint runs OCR and/or UI detection independently and provides
+    detailed timing information for each processing step:
+
+    - Preprocessing time
+    - Text Detection (DBNet) time
+    - Text Recognition (CRNN) time per region
+    - YOLO inference time
+    - Total processing time
+
+    Use this to understand CV pipeline performance and identify bottlenecks.
+    """
+    try:
+        return await cv_service.run_diagnostic(
+            image_base64=request.image,
+            resize=request.resize,
+            run_ocr=request.run_ocr,
+            run_detection=request.run_detection
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Diagnostic analysis failed: {str(e)}"
+        )
 
 
 @router.post(

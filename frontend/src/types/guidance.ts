@@ -160,6 +160,51 @@ export interface DetectedElement {
   metadata: Record<string, unknown>;
 }
 
+/**
+ * Per-region timing breakdown for OCR text recognition diagnostic.
+ */
+export interface RecognitionRegionTiming {
+  region_index: number;
+  crop_width: number;
+  crop_height: number;
+  preprocess_ms: number;
+  inference_ms: number;
+  decode_ms: number;
+  total_ms: number;
+  text: string;  // Recognized text (truncated for display)
+  confidence: number;
+}
+
+/**
+ * Per-phase timing breakdown for UI element detection (from Ultralytics/YOLO).
+ */
+export interface DetectionTiming {
+  preprocess_ms: number;  // Image preprocessing (resize, normalize)
+  inference_ms: number;   // Neural network forward pass
+  postprocess_ms: number;  // NMS, box filtering, etc.
+  total_ms: number;       // Sum of all phases
+}
+
+/**
+ * Detailed timing breakdown for CV analysis.
+ * Shows time spent in each processing stage.
+ */
+export interface TimingBreakdown {
+  total_ms: number;
+  preprocessing_ms: number;
+  detection_ms: number;  // UI element detection (OmniParser/YOLO)
+  detection_timing?: DetectionTiming | null;  // Per-phase detection breakdown
+  ocr_ms: number;  // Total OCR time
+  ocr_detection_ms: number;  // Text detection phase within OCR
+  ocr_recognition_ms: number;  // Text recognition phase within OCR
+  matching_ms: number;
+  verification_ms: number;
+  element_count: number;
+  text_region_count: number;
+  // Per-region timing breakdown (only populated in diagnostic mode)
+  region_timings?: RecognitionRegionTiming[] | null;
+}
+
 export interface StartGuidanceResponse {
   success: boolean;
   session_id: string;
@@ -189,6 +234,8 @@ export interface CaptureStepResponse {
   target_verified: boolean;  // Whether target app was verified via brand keywords
   verification_keywords_matched: string[];  // Which keywords were found
   hwnd_cached: boolean;  // Whether HWND was cached for future quick checks
+  // Timing breakdown for performance analysis
+  timing?: TimingBreakdown | null;
 }
 
 // =============================================

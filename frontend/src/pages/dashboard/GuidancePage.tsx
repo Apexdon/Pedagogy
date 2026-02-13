@@ -46,6 +46,7 @@ export function GuidancePage() {
   // Initialize the coordinator for automatic detection
   const {
     status: coordinatorStatus,
+    state: coordinatorState,
     isInitialized: coordinatorInitialized,
     isActive: coordinatorActive,
     isTargetWindowActive,
@@ -120,6 +121,11 @@ export function GuidancePage() {
     };
   }, [stopCoordinator]);
 
+  // Debug: log timing updates
+  useEffect(() => {
+    console.log('GuidancePage - coordinatorState?.lastTiming:', coordinatorState?.lastTiming);
+  }, [coordinatorState?.lastTiming]);
+
   return (
     <div className="h-[calc(100vh-8rem)] flex flex-col">
       {/* Header */}
@@ -178,7 +184,7 @@ export function GuidancePage() {
 
         {/* Right Panel - Active Step Display (2/3 width) */}
         <div className="flex-1">
-          <GuidanceSessionPanel />
+          <GuidanceSessionPanel timing={coordinatorState?.lastTiming ?? null} />
         </div>
       </div>
     </div>

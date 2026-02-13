@@ -1,4 +1,5 @@
-import React from 'react';
+import React, { useState } from 'react';
+import type { TimingBreakdown } from '../types';
 
 interface SessionData {
   sessionId: string;
@@ -15,6 +16,7 @@ interface CurrentStep {
   actionType: string;
   targetLabel: string | null;
   confidence: number | null;
+  timing?: TimingBreakdown | null;
 }
 
 interface CoordinatorStatus {
@@ -44,6 +46,10 @@ export const ExpandedPanel: React.FC<ExpandedPanelProps> = ({
   onSkip,
   onEndSession,
 }) => {
+  const [showTiming, setShowTiming] = useState(false);
+  const [showDetectionTiming, setShowDetectionTiming] = useState(false);
+  const [showRegionTiming, setShowRegionTiming] = useState(false);
+
   const progress = currentStep
     ? (currentStep.stepNumber / currentStep.totalSteps) * 100
     : 0;
@@ -154,6 +160,124 @@ export const ExpandedPanel: React.FC<ExpandedPanelProps> = ({
                 <span className="confidence-badge">
                   {Math.round(currentStep.confidence * 100)}%
                 </span>
+              )}
+            </div>
+          )}
+
+          {/* Timing breakdown (collapsible) */}
+          {currentStep.timing && (
+            <div className="timing-section">
+              <button
+                className="timing-toggle"
+                onClick={() => setShowTiming(!showTiming)}
+              >
+                <span className="timing-icon">⏱</span>
+                <span>Analysis: {currentStep.timing.total_ms.toFixed(0)}ms</span>
+                <span className="toggle-arrow">{showTiming ? '▼' : '▶'}</span>
+              </button>
+              {showTiming && (
+                <div className="timing-details">
+                  <div className="timing-row">
+                    <span className="timing-label">Preprocessing</span>
+                    <span className="timing-value">{currentStep.timing.preprocessing_ms.toFixed(0)}ms</span>
+                  </div>
+                  <div className="timing-row">
+                    <span className="timing-label">Detection (UI)</span>
+                    <span className="timing-value">{currentStep.timing.detection_ms.toFixed(0)}ms</span>
+                  </div>
+                  {/* Detection timing breakdown (expandable) */}
+                  {currentStep.timing.detection_timing && (
+                    <div className="region-timing-section">
+                      <button
+                        className="region-timing-toggle"
+                        onClick={() => setShowDetectionTiming(!showDetectionTiming)}
+                      >
+                        <span className="timing-label">  ↳ Detection Breakdown</span>
+                        <span className="toggle-arrow">{showDetectionTiming ? '▼' : '▶'}</span>
+                      </button>
+                      {showDetectionTiming && (
+                        <div className="detection-timing-list">
+                          <div className="timing-row timing-sub">
+                            <span className="timing-label">Preprocess</span>
+                            <span className="timing-value">{currentStep.timing.detection_timing.preprocess_ms.toFixed(0)}ms</span>
+                          </div>
+                          <div className="timing-row timing-sub">
+                            <span className="timing-label">Inference</span>
+                            <span className="timing-value">{currentStep.timing.detection_timing.inference_ms.toFixed(0)}ms</span>
+                          </div>
+                          <div className="timing-row timing-sub">
+                            <span className="timing-label">Postprocess</span>
+                            <span className="timing-value">{currentStep.timing.detection_timing.postprocess_ms.toFixed(0)}ms</span>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  <div className="timing-row">
+                    <span className="timing-label">OCR Total</span>
+                    <span className="timing-value">{currentStep.timing.ocr_ms.toFixed(0)}ms</span>
+                  </div>
+                  {/* OCR breakdown - indented */}
+                  <div className="timing-row timing-sub">
+                    <span className="timing-label">↳ Text Detection</span>
+                    <span className="timing-value">{(currentStep.timing.ocr_detection_ms ?? 0).toFixed(0)}ms</span>
+                  </div>
+                  <div className="timing-row timing-sub">
+                    <span className="timing-label">↳ Text Recognition</span>
+                    <span className="timing-value">{(currentStep.timing.ocr_recognition_ms ?? 0).toFixed(0)}ms</span>
+                  </div>
+                  {/* Per-region timing breakdown (expandable) */}
+                  {currentStep.timing.region_timings && currentStep.timing.region_timings.length > 0 && (
+                    <div className="region-timing-section">
+                      <button
+                        className="region-timing-toggle"
+                        onClick={() => setShowRegionTiming(!showRegionTiming)}
+                      >
+                        <span className="timing-label">  ↳ Per-Region Details ({currentStep.timing.region_timings.length})</span>
+                        <span className="toggle-arrow">{showRegionTiming ? '▼' : '▶'}</span>
+                      </button>
+                      {showRegionTiming && (
+                        <div className="region-timing-list">
+                          {currentStep.timing.region_timings.map((region) => (
+                            <div key={region.region_index} className="region-timing-item">
+                              <div className="region-header">
+                                <span className="region-index">#{region.region_index + 1}</span>
+                                <span className="region-text" title={region.text}>
+                                  {region.text.length > 20 ? region.text.substring(0, 20) + '...' : region.text}
+                                </span>
+                                <span className="region-total">{region.total_ms.toFixed(0)}ms</span>
+                              </div>
+                              <div className="region-details">
+                                <span className="region-size">{region.crop_width}×{region.crop_height}</span>
+                                <span className="region-breakdown">
+                                  pre:{region.preprocess_ms.toFixed(0)} inf:{region.inference_ms.toFixed(0)} dec:{region.decode_ms.toFixed(0)}
+                                </span>
+                                <span className="region-conf">{(region.confidence * 100).toFixed(0)}%</span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  <div className="timing-row">
+                    <span className="timing-label">Matching</span>
+                    <span className="timing-value">{currentStep.timing.matching_ms.toFixed(0)}ms</span>
+                  </div>
+                  <div className="timing-row">
+                    <span className="timing-label">Verification</span>
+                    <span className="timing-value">{currentStep.timing.verification_ms.toFixed(0)}ms</span>
+                  </div>
+                  <div className="timing-divider" />
+                  <div className="timing-row">
+                    <span className="timing-label">Elements found</span>
+                    <span className="timing-value">{currentStep.timing.element_count}</span>
+                  </div>
+                  <div className="timing-row">
+                    <span className="timing-label">Text regions</span>
+                    <span className="timing-value">{currentStep.timing.text_region_count}</span>
+                  </div>
+                </div>
               )}
             </div>
           )}

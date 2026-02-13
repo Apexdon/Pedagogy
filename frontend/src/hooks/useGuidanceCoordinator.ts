@@ -84,7 +84,9 @@ export function useGuidanceCoordinator(
   // Update state from coordinator
   const updateState = useCallback(() => {
     if (isMountedRef.current) {
-      setState(coordinatorRef.current.getState());
+      const newState = coordinatorRef.current.getState();
+      console.log('useGuidanceCoordinator - updateState called, lastTiming:', newState.lastTiming);
+      setState(newState);
     }
   }, []);
 

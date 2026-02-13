@@ -39,6 +39,9 @@ from app.schemas.guidance import (
     FastVerifyResponse,
     FastPositionUpdateRequest,
     FastPositionUpdateResponse,
+    TimingBreakdown,
+    RecognitionRegionTiming,
+    DetectionTiming,
 )
 from app.ai_engine import GuidanceGenerator, StepTracker, get_llm_client
 from app.services.knowledge_service import KnowledgeService
@@ -563,6 +566,27 @@ async def guidance_health():
     )
 
 
+@router.get("/debug/cv-config")
+async def debug_cv_config():
+    """Debug endpoint to check CV configuration."""
+    from app.services.cv_service import get_cv_service
+    try:
+        cv_service = get_cv_service()
+        ocr_engine = cv_service.context_engine.ocr_engine
+        return {
+            "ocr_diagnostic_mode": getattr(ocr_engine, 'diagnostic_mode', 'N/A'),
+            "ocr_engine_type": type(ocr_engine).__name__,
+            "ocr_inference_threads": getattr(ocr_engine, 'inference_threads', 'N/A'),
+            "ocr_inference_threads_setting": settings.OCR_INFERENCE_THREADS,
+            "ocr_max_aspect_ratio": getattr(ocr_engine, 'max_aspect_ratio', 'N/A'),
+            "ocr_max_aspect_ratio_setting": getattr(settings, 'OCR_MAX_ASPECT_RATIO', 'N/A'),
+            "cv_parallel_mode": settings.CV_PARALLEL_MODE,
+            "ocr_diagnostic_mode_setting": settings.OCR_DIAGNOSTIC_MODE,
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
 # =============================================
 # Step Capture & Halo Integration
 # =============================================
@@ -920,10 +944,64 @@ async def capture_step(
             window_title=window_title,
         )
 
+    # ==========================================
+    # Timing Tracking for Performance Analysis
+    # ==========================================
+    timing = TimingBreakdown()
+    preprocessing_end = time.time()
+    timing.preprocessing_ms = (preprocessing_end - start_time) * 1000
+
     # Analyze screen
+    cv_start = time.time()
     try:
         cv_service = get_cv_service()
         screen_state = await cv_service.analyze_screen(image_base64)
+        cv_end = time.time()
+
+        # Extract actual component times from CV analysis metadata
+        # The ContextEngine tracks individual detection and OCR times
+        cv_metadata = screen_state.metadata or {}
+        timing.detection_ms = cv_metadata.get('detection_time_ms', 0)
+        timing.ocr_ms = cv_metadata.get('ocr_time_ms', 0)
+        timing.ocr_detection_ms = cv_metadata.get('ocr_detection_time_ms', 0)  # Text detection phase
+        timing.ocr_recognition_ms = cv_metadata.get('ocr_recognition_time_ms', 0)  # Text recognition phase
+        timing.element_count = len(screen_state.elements)
+        timing.text_region_count = len(screen_state.text_regions)
+
+        # Extract per-phase detection timing breakdown (if available)
+        raw_detection_timing = cv_metadata.get('detection_timing')
+        if raw_detection_timing:
+            timing.detection_timing = DetectionTiming(
+                preprocess_ms=raw_detection_timing.get('preprocess_ms', 0),
+                inference_ms=raw_detection_timing.get('inference_ms', 0),
+                postprocess_ms=raw_detection_timing.get('postprocess_ms', 0),
+                total_ms=raw_detection_timing.get('total_ms', 0),
+            )
+            logger.info(f"[CAPTURE_STEP] Detection timing: pre={timing.detection_timing.preprocess_ms:.0f}ms "
+                       f"inf={timing.detection_timing.inference_ms:.0f}ms post={timing.detection_timing.postprocess_ms:.0f}ms")
+
+        # Extract per-region timing breakdown (if available from diagnostic mode)
+        raw_region_timings = cv_metadata.get('ocr_region_timings')
+        if raw_region_timings:
+            timing.region_timings = [
+                RecognitionRegionTiming(
+                    region_index=rt.get('region_index', 0),
+                    crop_width=rt.get('crop_width', 0),
+                    crop_height=rt.get('crop_height', 0),
+                    preprocess_ms=rt.get('preprocess_ms', 0),
+                    inference_ms=rt.get('inference_ms', 0),
+                    decode_ms=rt.get('decode_ms', 0),
+                    total_ms=rt.get('total_ms', 0),
+                    text=rt.get('text', ''),
+                    confidence=rt.get('confidence', 0),
+                )
+                for rt in raw_region_timings
+            ]
+            logger.info(f"[CAPTURE_STEP] Extracted {len(timing.region_timings)} per-region timing breakdowns")
+
+        # Log for debugging
+        logger.info(f"[CAPTURE_STEP] CV metadata: detection={timing.detection_ms:.0f}ms, ocr={timing.ocr_ms:.0f}ms (det={timing.ocr_detection_ms:.0f}ms, rec={timing.ocr_recognition_ms:.0f}ms)")
+
     except Exception as e:
         logger.error(f"CV analysis failed: {e}")
         return CaptureStepResponse(
@@ -948,6 +1026,7 @@ async def capture_step(
     # extracted by CV analysis - no duplicate processing.
     from app.services.target_verifier import get_target_verifier
 
+    verification_start = time.time()
     target_verified = True
     verification_keywords_matched = []
     hwnd_cached = False
@@ -977,26 +1056,32 @@ async def capture_step(
         verification_keywords_matched = verification_result.matched_keywords
         hwnd_cached = hwnd is not None and verification_result.is_verified
 
-        if not target_verified:
-            # Not the target application - return early without element matching
-            logger.warning(f"[CAPTURE_STEP] Visual verification failed - not on target app. Looking for: {brand_keywords}")
-            return CaptureStepResponse(
-                success=True,  # Capture succeeded, but wrong app
-                session_id=session_id,
-                step_number=current_step_obj.step_number,
-                instruction=current_step_obj.instruction,
-                target_found=False,
-                target=None,
-                all_elements=[],  # Don't return elements for wrong app
-                capture_time_ms=(time.time() - start_time) * 1000,
-                match_confidence=0,
-                message=f"Please navigate to the target application. Looking for: {', '.join(brand_keywords)}",
-                window_title=window_title,
-                target_verified=False,
-                verification_keywords_matched=[],
-                hwnd_cached=False,
-            )
+    timing.verification_ms = (time.time() - verification_start) * 1000
 
+    if brand_keywords and not (request and request.skip_verification) and not target_verified:
+        # Not the target application - return early without element matching
+        logger.warning(f"[CAPTURE_STEP] Visual verification failed - not on target app. Looking for: {brand_keywords}")
+        # Calculate total timing for early return
+        timing.total_ms = (time.time() - start_time) * 1000
+        return CaptureStepResponse(
+            success=True,  # Capture succeeded, but wrong app
+            session_id=session_id,
+            step_number=current_step_obj.step_number,
+            instruction=current_step_obj.instruction,
+            target_found=False,
+            target=None,
+            all_elements=[],  # Don't return elements for wrong app
+            capture_time_ms=timing.total_ms,
+            match_confidence=0,
+            message=f"Please navigate to the target application. Looking for: {', '.join(brand_keywords)}",
+            window_title=window_title,
+            target_verified=False,
+            verification_keywords_matched=[],
+            hwnd_cached=False,
+            timing=timing,  # Include timing even on early return
+        )
+
+    if brand_keywords:
         logger.info(f"[CAPTURE_STEP] Visual verification passed! Matched keywords: {verification_keywords_matched}")
 
     # Helper function to enrich element labels using nearby OCR text regions
@@ -1182,8 +1267,12 @@ async def capture_step(
     print(f"[CAPTURE_STEP] Target spec: type={target_spec.element_type}, label='{target_spec.label}', keywords={target_spec.keywords}, action={target_spec.action}")
     print(f"[CAPTURE_STEP] {len(ui_elements)} UI elements. Sample labels: {[e.label for e in ui_elements[:10] if e.label]}")
 
+    matching_start = time.time()
     match_result = matcher.match_element(target_spec, ui_elements)
+    timing.matching_ms = (time.time() - matching_start) * 1000
+
     capture_time = (time.time() - start_time) * 1000
+    timing.total_ms = capture_time
 
     if match_result:
         target = HaloTargetResponse(
@@ -1201,6 +1290,19 @@ async def capture_step(
             confidence=match_result.confidence,
         )
 
+        logger.info(f"[CAPTURE_STEP] Returning timing: total={timing.total_ms}ms, elements={timing.element_count}, text_regions={timing.text_region_count}")
+        print(f"\n{'='*60}")
+        print(f"[CAPTURE_STEP] TIMING BREAKDOWN (target found)")
+        print(f"  Total: {timing.total_ms:.0f}ms")
+        print(f"  Preprocessing: {timing.preprocessing_ms:.0f}ms")
+        print(f"  Detection (UI): {timing.detection_ms:.0f}ms")
+        print(f"  OCR Total: {timing.ocr_ms:.0f}ms")
+        print(f"    ↳ Text Detection: {timing.ocr_detection_ms:.0f}ms")
+        print(f"    ↳ Text Recognition: {timing.ocr_recognition_ms:.0f}ms")
+        print(f"  Matching: {timing.matching_ms:.0f}ms")
+        print(f"  Verification: {timing.verification_ms:.0f}ms")
+        print(f"  Elements: {timing.element_count}, Text regions: {timing.text_region_count}")
+        print(f"{'='*60}\n")
         return CaptureStepResponse(
             success=True,
             session_id=session_id,
@@ -1216,8 +1318,10 @@ async def capture_step(
             target_verified=target_verified,
             verification_keywords_matched=verification_keywords_matched,
             hwnd_cached=hwnd_cached,
+            timing=timing,
         )
     else:
+        print(f"\n[CAPTURE_STEP] TIMING BREAKDOWN (target NOT found): total={timing.total_ms:.0f}ms, elements={timing.element_count}\n")
         return CaptureStepResponse(
             success=True,
             session_id=session_id,
@@ -1233,6 +1337,7 @@ async def capture_step(
             target_verified=target_verified,
             verification_keywords_matched=verification_keywords_matched,
             hwnd_cached=hwnd_cached,
+            timing=timing,
         )
 
 

@@ -10,4 +10,5 @@ pub use window::{
     SidePanelManager, SidePanelError, PanelState, SidePanelState,
     DockedEdge, PANEL_WINDOW_LABEL,
     SessionStartedPayload, StepChangedPayload, SessionEndedPayload, CoordinatorStatusPayload,
+    TimingBreakdown,
 };

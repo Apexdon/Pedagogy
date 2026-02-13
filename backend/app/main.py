@@ -22,9 +22,108 @@ from app.api import api_router
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan - runs on startup and shutdown."""
-    # Startup: Initialize database tables
+    import time
+    import numpy as np
+
+    # Startup: Reset CV service to force fresh initialization
+    # This is critical for uvicorn --reload to pick up code changes
+    from app.services.cv_service import reset_cv_service
+    reset_cv_service()
+    print("[Startup] CV service reset - will reinitialize with latest code")
+
+    # Reset OmniParser global model cache
+    try:
+        from cv_pipeline import omniparser_detector
+        omniparser_detector._icon_detect_model = None
+        omniparser_detector._icon_caption_model = None
+        omniparser_detector._icon_caption_processor = None
+        print("[Startup] OmniParser model cache cleared")
+    except ImportError:
+        pass
+
+    # Initialize database tables
     await init_db()
     print("Database tables initialized")
+
+    # =========================================
+    # PRELOAD CV MODELS (eliminates first-run delay)
+    # =========================================
+    # Models use lazy loading - preload them now so first user request is fast
+    # OPTIMIZATION: Use realistic image size (640x360) and multiple warmup runs
+    # to fully warm CPU caches and any JIT compilation
+    print("\n" + "=" * 60)
+    print("  PRELOADING CV MODELS (this may take 10-15 seconds)...")
+    print("=" * 60)
+
+    preload_start = time.perf_counter()
+
+    # Number of warmup iterations (first loads model, subsequent warm caches)
+    WARMUP_ITERATIONS = 3
+
+    try:
+        from app.services.cv_service import get_cv_service
+        cv_service = get_cv_service()
+
+        # Set PyTorch thread limit (must be done after torch is imported via cv_service)
+        try:
+            import torch
+            import os
+            threads = int(os.environ.get('CV_THREADS_PER_TASK', '4'))
+            torch.set_num_threads(threads)
+            print(f"  [Thread Limit] PyTorch threads set to {threads}", flush=True)
+        except Exception as e:
+            print(f"  [Thread Limit] Could not set PyTorch threads: {e}", flush=True)
+
+        # Create a realistic-sized dummy image matching fast mode (640x360)
+        # This ensures warmup exercises the same code paths as real usage
+        warmup_width = settings.CV_FAST_RESIZE_WIDTH if settings.CV_FAST_MODE else settings.CV_DEFAULT_RESIZE_WIDTH
+        warmup_height = 360 if settings.CV_FAST_MODE else settings.CV_DEFAULT_RESIZE_HEIGHT
+        dummy_image = np.zeros((warmup_height, warmup_width, 3), dtype=np.uint8)
+
+        # Add some noise to make it more realistic (helps with edge detection)
+        dummy_image = np.random.randint(50, 200, (warmup_height, warmup_width, 3), dtype=np.uint8)
+
+        print(f"  Warmup image size: {warmup_width}x{warmup_height} ({WARMUP_ITERATIONS} iterations)", flush=True)
+
+        # Warmup detector (loads YOLO/OmniParser model)
+        print(f"  [Detector] Running {WARMUP_ITERATIONS} warmup iterations...", flush=True)
+        detector_times = []
+        try:
+            for i in range(WARMUP_ITERATIONS):
+                iter_start = time.perf_counter()
+                _ = cv_service.context_engine.detector.detect(dummy_image, generate_captions=False)
+                iter_time = (time.perf_counter() - iter_start) * 1000
+                detector_times.append(iter_time)
+                print(f"    Detector iteration {i+1}: {iter_time:.0f}ms", flush=True)
+            print(f"  [OK] Detector warmed: {detector_times[0]:.0f}ms -> {detector_times[-1]:.0f}ms", flush=True)
+        except Exception as e:
+            print(f"  [!] Detector warmup failed: {e}", flush=True)
+
+        # Warmup OCR engine (loads OpenVINO/PaddleOCR model)
+        print(f"  [OCR] Running {WARMUP_ITERATIONS} warmup iterations...", flush=True)
+        ocr_times = []
+        try:
+            for i in range(WARMUP_ITERATIONS):
+                iter_start = time.perf_counter()
+                _ = cv_service.context_engine.ocr_engine.extract_text(dummy_image)
+                iter_time = (time.perf_counter() - iter_start) * 1000
+                ocr_times.append(iter_time)
+                print(f"    OCR iteration {i+1}: {iter_time:.0f}ms", flush=True)
+            print(f"  [OK] OCR warmed: {ocr_times[0]:.0f}ms -> {ocr_times[-1]:.0f}ms", flush=True)
+        except Exception as e:
+            print(f"  [!] OCR warmup failed: {e}", flush=True)
+
+        preload_time = (time.perf_counter() - preload_start) * 1000
+        print("=" * 60, flush=True)
+        print(f"  CV MODELS PRELOADED in {preload_time:.0f}ms", flush=True)
+        print("  First user request will now be fast!", flush=True)
+        print("=" * 60 + "\n", flush=True)
+
+    except Exception as e:
+        print(f"  [!] CV model preload failed: {e}")
+        print("  First request will load models (slower)")
+        print("=" * 60 + "\n")
+
     yield
     # Shutdown: Cleanup if needed
     print("Application shutting down")

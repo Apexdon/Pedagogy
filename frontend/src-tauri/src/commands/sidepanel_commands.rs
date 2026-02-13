@@ -11,6 +11,7 @@ use tokio::sync::RwLock;
 use crate::sidepanel::{
     DockedEdge, PanelState, SidePanelManager, SidePanelState,
     SessionStartedPayload, StepChangedPayload, SessionEndedPayload, CoordinatorStatusPayload,
+    TimingBreakdown,
 };
 
 /// Shared state for the side panel manager
@@ -275,6 +276,7 @@ pub async fn notify_panel_step_changed(
     action_type: String,
     target_label: Option<String>,
     confidence: Option<f32>,
+    timing: Option<TimingBreakdown>,
 ) -> Result<SidePanelResponse, String> {
     let manager = state.0.read().await;
 
@@ -286,6 +288,7 @@ pub async fn notify_panel_step_changed(
         action_type,
         target_label,
         confidence,
+        timing,
     };
 
     match manager.notify_step_changed(&app, payload).await {

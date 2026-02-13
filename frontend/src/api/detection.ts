@@ -34,6 +34,8 @@ import type {
   ExtractTextResponse,
   CVHealthResponse,
   MonitorInfo,
+  DiagnosticRequest,
+  DiagnosticResponse,
 } from '@/types/detection';
 
 // =============================================
@@ -324,6 +326,20 @@ export async function extractText(
  */
 export async function getCVHealth(): Promise<CVHealthResponse> {
   const response = await apiClient.get<CVHealthResponse>('/capture/health');
+  return response.data;
+}
+
+/**
+ * Runs diagnostic analysis with detailed timing breakdown.
+ * Use this to understand CV pipeline performance and identify bottlenecks.
+ */
+export async function runDiagnostic(
+  request: DiagnosticRequest
+): Promise<DiagnosticResponse> {
+  const response = await apiClient.post<DiagnosticResponse>(
+    '/capture/diagnostic',
+    request
+  );
   return response.data;
 }
 

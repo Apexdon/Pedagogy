@@ -31,7 +31,7 @@ import { LoginPage, RegisterPage, SelectOrgPage } from '@/pages/auth';
 import { DashboardPage, SettingsPage, GuidancePage, HistoryPage } from '@/pages/dashboard';
 
 // Organisation pages
-import { OnboardPage, ProfilePage, MembersPage, OrgDashboardPage, KnowledgeBasePage, TargetAppsPage } from '@/pages/org';
+import { OnboardPage, ProfilePage, MembersPage, OrgDashboardPage, KnowledgeBasePage, TargetAppsPage, CVDiagnosticPage } from '@/pages/org';
 
 export const router = createBrowserRouter([
   // Public routes
@@ -149,6 +149,16 @@ export const router = createBrowserRouter([
       <ProtectedRoute>
         <DashboardLayout>
           <TargetAppsPage />
+        </DashboardLayout>
+      </ProtectedRoute>
+    ),
+  },
+  {
+    path: '/org/cv-diagnostic',
+    element: (
+      <ProtectedRoute>
+        <DashboardLayout>
+          <CVDiagnosticPage />
         </DashboardLayout>
       </ProtectedRoute>
     ),

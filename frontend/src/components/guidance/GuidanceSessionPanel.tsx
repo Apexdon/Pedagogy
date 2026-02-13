@@ -6,11 +6,20 @@
  * automatically by the GuidanceCoordinator service.
  */
 
+import { useState } from 'react';
 import { Card, CardBody, Button, Loading } from '@/components/ui';
 import { StepProgressBar } from './StepProgressBar';
 import { useGuidance } from '@/hooks';
+import type { TimingBreakdown } from '@/types/guidance';
 
-export function GuidanceSessionPanel() {
+interface GuidanceSessionPanelProps {
+  timing?: TimingBreakdown | null;
+}
+
+export function GuidanceSessionPanel({ timing }: GuidanceSessionPanelProps) {
+  const [showTiming, setShowTiming] = useState(false);
+  const [showDetectionTiming, setShowDetectionTiming] = useState(false);
+  const [showRegionTiming, setShowRegionTiming] = useState(false);
   const {
     query,
     steps,
@@ -201,6 +210,113 @@ export function GuidanceSessionPanel() {
               <p className="text-xs text-gray-400 mb-4">
                 Confidence: {Math.round(overallConfidence * 100)}%
               </p>
+            )}
+
+            {/* Timing Breakdown (for debugging) */}
+            {timing && (
+              <div className="border border-gray-200 rounded-lg mb-4 overflow-hidden">
+                <button
+                  onClick={() => setShowTiming(!showTiming)}
+                  className="w-full flex items-center justify-between px-4 py-2 bg-gray-50 hover:bg-gray-100 transition-colors"
+                >
+                  <div className="flex items-center gap-2 text-sm text-gray-600">
+                    <span>⏱</span>
+                    <span>CV Analysis: {timing.total_ms.toFixed(0)}ms</span>
+                  </div>
+                  <span className="text-xs text-gray-400">
+                    {showTiming ? '▼' : '▶'}
+                  </span>
+                </button>
+                {showTiming && (
+                  <div className="px-4 py-3 bg-gray-50 border-t border-gray-200 text-xs font-mono">
+                    <div className="grid grid-cols-2 gap-y-1">
+                      <span className="text-gray-500">Preprocessing</span>
+                      <span className="text-right text-blue-600">{timing.preprocessing_ms.toFixed(0)}ms</span>
+                      <span className="text-gray-500">Detection (UI)</span>
+                      <span className="text-right text-blue-600">{timing.detection_ms.toFixed(0)}ms</span>
+                    </div>
+                    {/* Detection timing breakdown (expandable) */}
+                    {timing.detection_timing && (
+                      <div className="mt-1 mb-1">
+                        <button
+                          onClick={() => setShowDetectionTiming(!showDetectionTiming)}
+                          className="w-full flex items-center justify-between py-1 pl-3 pr-0 text-gray-400 hover:text-gray-600 transition-colors"
+                        >
+                          <span>↳ Detection Breakdown</span>
+                          <span className="text-xs">{showDetectionTiming ? '▼' : '▶'}</span>
+                        </button>
+                        {showDetectionTiming && (
+                          <div className="ml-6 mt-1 grid grid-cols-2 gap-y-1 border-l-2 border-gray-200 pl-2">
+                            <span className="text-gray-400">Preprocess</span>
+                            <span className="text-right text-blue-500">{timing.detection_timing.preprocess_ms.toFixed(0)}ms</span>
+                            <span className="text-gray-400">Inference</span>
+                            <span className="text-right text-blue-500">{timing.detection_timing.inference_ms.toFixed(0)}ms</span>
+                            <span className="text-gray-400">Postprocess</span>
+                            <span className="text-right text-blue-500">{timing.detection_timing.postprocess_ms.toFixed(0)}ms</span>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    <div className="grid grid-cols-2 gap-y-1">
+                      <span className="text-gray-500">OCR Total</span>
+                      <span className="text-right text-blue-600">{timing.ocr_ms.toFixed(0)}ms</span>
+                      {/* OCR breakdown - indented */}
+                      <span className="text-gray-400 pl-3">↳ Text Detection</span>
+                      <span className="text-right text-blue-500">{(timing.ocr_detection_ms ?? 0).toFixed(0)}ms</span>
+                      <span className="text-gray-400 pl-3">↳ Text Recognition</span>
+                      <span className="text-right text-blue-500">{(timing.ocr_recognition_ms ?? 0).toFixed(0)}ms</span>
+                    </div>
+                    {/* Per-region timing breakdown (expandable) */}
+                    {timing.region_timings && timing.region_timings.length > 0 && (
+                      <div className="mt-1 mb-1">
+                        <button
+                          onClick={() => setShowRegionTiming(!showRegionTiming)}
+                          className="w-full flex items-center justify-between py-1 pl-6 pr-0 text-gray-400 hover:text-gray-600 transition-colors"
+                        >
+                          <span>↳ Per-Region Details ({timing.region_timings.length})</span>
+                          <span className="text-xs">{showRegionTiming ? '▼' : '▶'}</span>
+                        </button>
+                        {showRegionTiming && (
+                          <div className="ml-6 mt-1 space-y-2 border-l-2 border-gray-200 pl-2">
+                            {timing.region_timings.map((region) => (
+                              <div key={region.region_index} className="bg-white rounded p-2 text-xs">
+                                <div className="flex items-center justify-between mb-1">
+                                  <span className="font-medium text-gray-700">#{region.region_index + 1}</span>
+                                  <span className="text-blue-600 font-medium">{region.total_ms.toFixed(0)}ms</span>
+                                </div>
+                                <div className="text-gray-500 truncate mb-1" title={region.text}>
+                                  "{region.text.length > 25 ? region.text.substring(0, 25) + '...' : region.text}"
+                                </div>
+                                <div className="flex items-center gap-2 text-gray-400">
+                                  <span>{region.crop_width}×{region.crop_height}</span>
+                                  <span>|</span>
+                                  <span>pre:{region.preprocess_ms.toFixed(0)}</span>
+                                  <span>inf:{region.inference_ms.toFixed(0)}</span>
+                                  <span>dec:{region.decode_ms.toFixed(0)}</span>
+                                  <span>|</span>
+                                  <span className="text-green-600">{(region.confidence * 100).toFixed(0)}%</span>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    <div className="grid grid-cols-2 gap-y-1">
+                      <span className="text-gray-500">Matching</span>
+                      <span className="text-right text-blue-600">{timing.matching_ms.toFixed(0)}ms</span>
+                      <span className="text-gray-500">Verification</span>
+                      <span className="text-right text-blue-600">{timing.verification_ms.toFixed(0)}ms</span>
+                    </div>
+                    <div className="border-t border-gray-200 mt-2 pt-2 grid grid-cols-2 gap-y-1">
+                      <span className="text-gray-500">Elements found</span>
+                      <span className="text-right text-green-600">{timing.element_count}</span>
+                      <span className="text-gray-500">Text regions</span>
+                      <span className="text-right text-green-600">{timing.text_region_count}</span>
+                    </div>
+                  </div>
+                )}
+              </div>
             )}
 
             {/* Spacer */}

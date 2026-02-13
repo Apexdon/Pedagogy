@@ -3,7 +3,7 @@
  */
 
 import { invoke } from '@tauri-apps/api/core';
-import type { SidePanelState, DockedEdge } from '../sidepanel/types';
+import type { SidePanelState, DockedEdge, TimingBreakdown } from '../sidepanel/types';
 
 export interface SidePanelResponse {
   success: boolean;
@@ -121,7 +121,8 @@ export async function notifyPanelStepChanged(
   detailedInstruction: string | null = null,
   actionType: string = 'click',
   targetLabel: string | null = null,
-  confidence: number | null = null
+  confidence: number | null = null,
+  timing: TimingBreakdown | null = null
 ): Promise<SidePanelResponse> {
   return invoke<SidePanelResponse>('notify_panel_step_changed', {
     step_number: stepNumber,
@@ -131,6 +132,7 @@ export async function notifyPanelStepChanged(
     action_type: actionType,
     target_label: targetLabel,
     confidence,
+    timing,
   });
 }
 
@@ -194,7 +196,8 @@ export async function updateGuidancePanel(
   detailedInstruction: string | null = null,
   actionType: string = 'click',
   targetLabel: string | null = null,
-  confidence: number | null = null
+  confidence: number | null = null,
+  timing: TimingBreakdown | null = null
 ): Promise<void> {
   await notifyPanelStepChanged(
     stepNumber,
@@ -203,7 +206,8 @@ export async function updateGuidancePanel(
     detailedInstruction,
     actionType,
     targetLabel,
-    confidence
+    confidence,
+    timing
   );
 }
 
