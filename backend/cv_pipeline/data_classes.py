@@ -97,37 +97,96 @@ class TextRegion:
 
 
 @dataclass
+class RecognitionRegionTiming:
+    """Per-region timing breakdown for OCR text recognition diagnostic."""
+    region_index: int
+    crop_width: int
+    crop_height: int
+    preprocess_ms: float  # Crop extraction + resize/normalize
+    inference_ms: float   # CRNN forward pass
+    decode_ms: float      # CTC decoding
+    total_ms: float       # Sum of all phases
+    text: str             # Recognized text (truncated for display)
+    confidence: float
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "region_index": self.region_index,
+            "crop_width": self.crop_width,
+            "crop_height": self.crop_height,
+            "preprocess_ms": round(self.preprocess_ms, 2),
+            "inference_ms": round(self.inference_ms, 2),
+            "decode_ms": round(self.decode_ms, 2),
+            "total_ms": round(self.total_ms, 2),
+            "text": self.text[:30] + "..." if len(self.text) > 30 else self.text,
+            "confidence": round(self.confidence, 3),
+        }
+
+
+@dataclass
+class DetectionTiming:
+    """Per-phase timing breakdown for UI element detection (from Ultralytics)."""
+    preprocess_ms: float  # Image preprocessing (resize, normalize)
+    inference_ms: float   # Neural network forward pass
+    postprocess_ms: float  # NMS, box filtering, etc.
+    total_ms: float       # Sum of all phases
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "preprocess_ms": round(self.preprocess_ms, 2),
+            "inference_ms": round(self.inference_ms, 2),
+            "postprocess_ms": round(self.postprocess_ms, 2),
+            "total_ms": round(self.total_ms, 2),
+        }
+
+
+@dataclass
 class DetectionResult:
     """Result from YOLO UI element detection."""
     elements: List[UIElement]
     processing_time_ms: float
     model_name: str
     image_size: Tuple[int, int]  # (width, height)
+    # Detailed timing breakdown (from Ultralytics speed dict)
+    timing: Optional[DetectionTiming] = None
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        result = {
             "elements": [e.to_dict() for e in self.elements],
             "element_count": len(self.elements),
             "processing_time_ms": round(self.processing_time_ms, 2),
             "model_name": self.model_name,
             "image_size": {"width": self.image_size[0], "height": self.image_size[1]}
         }
+        if self.timing:
+            result["timing"] = self.timing.to_dict()
+        return result
 
 
 @dataclass
 class OCRResult:
-    """Result from EasyOCR text extraction."""
+    """Result from OCR text extraction."""
     text_regions: List[TextRegion]
     processing_time_ms: float
     language: str
+    # Detailed timing breakdown (if available from engine)
+    detection_time_ms: float = 0.0  # Text detection phase
+    recognition_time_ms: float = 0.0  # Text recognition phase
+    # Per-region timing breakdown for diagnostics (optional)
+    region_timings: Optional[List[RecognitionRegionTiming]] = None
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        result = {
             "text_regions": [t.to_dict() for t in self.text_regions],
             "region_count": len(self.text_regions),
             "processing_time_ms": round(self.processing_time_ms, 2),
+            "detection_time_ms": round(self.detection_time_ms, 2),
+            "recognition_time_ms": round(self.recognition_time_ms, 2),
             "language": self.language
         }
+        if self.region_timings:
+            result["region_timings"] = [rt.to_dict() for rt in self.region_timings]
+        return result
 
     @property
     def full_text(self) -> str:

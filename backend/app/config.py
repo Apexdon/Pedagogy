@@ -86,20 +86,22 @@ class Settings(BaseSettings):
     # Download models: huggingface-cli download microsoft/OmniParser-v2.0 --local-dir weights
     OMNIPARSER_ICON_DETECT_PATH: str = "weights/icon_detect/model.pt"
     OMNIPARSER_ICON_CAPTION_PATH: str = "weights/icon_caption_florence"
-    OMNIPARSER_CONFIDENCE_THRESHOLD: float = 0.1  # Lower threshold for more detections
+    OMNIPARSER_CONFIDENCE_THRESHOLD: float = 0.25  # Balanced threshold - filters noise but keeps useful elements (was 0.1)
     OMNIPARSER_IOU_THRESHOLD: float = 0.45
     OMNIPARSER_ENABLE_CAPTIONING: bool = False  # Disabled - using OCR fusion instead (Florence-2 has _supports_sdpa error)
+    OMNIPARSER_USE_INT8: bool = True  # Use INT8 quantized model for 2-4x faster inference (requires model_int8_openvino_model/)
 
     # Legacy YOLO v11 Settings (fallback if OmniParser not available)
     YOLO_MODEL_PATH: str = "yolo11n.pt"
     YOLO_CONFIDENCE_THRESHOLD: float = 0.5
     YOLO_IOU_THRESHOLD: float = 0.45
 
-    # OCR Backend Selection: "windows_ocr" (fastest), "surya", "paddleocr", or "easyocr"
+    # OCR Backend Selection: "windows_ocr" (fastest), "surya", "paddleocr", "google", or "easyocr"
     # windows_ocr: ~100-300ms, good accuracy (Windows 10+ native API, best for clean UI text)
     # surya: ~8-15min on CPU (needs GPU), excellent accuracy (transformer-based)
-    # paddleocr: ~5-10s, excellent accuracy (uses PaddlePaddle)
-    # easyocr: ~1-3s, good accuracy (fallback)
+    # paddleocr: ~8-10s with OpenVINO, excellent accuracy (uses RapidOCR-OpenVINO)
+    # google: ~2-5s, excellent accuracy (Cloud Vision API, requires GOOGLE_CLOUD_API_KEY)
+    # easyocr: ~27-50s, good accuracy (very slow fallback)
     # auto: tries windows_ocr -> paddleocr -> easyocr
     OCR_BACKEND: str = "paddleocr"
 
@@ -110,11 +112,20 @@ class Settings(BaseSettings):
     OCR_LANGUAGE: str = "en"
     OCR_USE_GPU: bool = False
     OCR_CONFIDENCE_THRESHOLD: float = 0.4  # Lowered to detect more text (form labels often low contrast)
+    OCR_MAX_REGIONS: int = 10  # Max text regions to recognize (0=unlimited). Reduces OCR time by ~50%.
+    OCR_DIAGNOSTIC_MODE: bool = True  # Enable per-region timing capture (adds ~10-20% overhead)
+    OCR_INFERENCE_THREADS: int = 8  # Thread count for OCR inference (-1=auto). Testing shows 8 threads ~30% faster than auto.
+    OCR_MAX_ASPECT_RATIO: float = 10.0  # Skip wide regions (width:height > N). Filters sentences/placeholders. 0=disabled.
 
     # PaddleOCR Settings (used when OCR_BACKEND="paddleocr")
     PADDLEOCR_USE_ANGLE_CLS: bool = False  # Disable for speed (only enable for rotated text)
     PADDLEOCR_USE_OPENVINO: bool = True  # Use OpenVINO for faster OCR inference (~5-10x speedup)
     PADDLEOCR_OPENVINO_DEVICE: str = "CPU"  # OpenVINO device: "CPU", "GPU", or "AUTO"
+
+    # Google Cloud Vision OCR Settings (used when OCR_BACKEND="google")
+    # Get API key from: https://console.cloud.google.com/apis/credentials
+    # Enable "Cloud Vision API" in your Google Cloud project
+    GOOGLE_CLOUD_API_KEY: str = ""  # Your Google Cloud API key
 
     # Surya OCR Settings (used when OCR_BACKEND="surya")
     SURYA_OCR_LANGUAGE: str = "en"
@@ -134,8 +145,36 @@ class Settings(BaseSettings):
     CV_DEFAULT_RESIZE_WIDTH: int = 1280  # Higher resolution for better OCR on small text
     CV_DEFAULT_RESIZE_HEIGHT: int = 720   # 720p for balance of speed and accuracy
 
+    # Fast Mode - use smaller resolution for faster processing (2-3x speedup)
+    CV_FAST_MODE: bool = True  # Enable reduced resolution for faster CV analysis
+    CV_FAST_RESIZE_WIDTH: int = 640  # Width for fast mode (height auto-calculated to maintain aspect ratio)
+
+    # Parallel vs Sequential execution mode
+    # Parallel: Run detection + OCR simultaneously (faster wall time, but CPU contention)
+    # Sequential: Run detection first, then OCR (slower wall time, but no contention)
+    # Set to True to test if sequential is faster due to reduced CPU contention
+    CV_SEQUENTIAL_MODE: bool = False  # True = sequential (no contention), False = parallel
+
+    # Multiprocessing Mode - use separate processes instead of threads
+    # This eliminates CPU contention by running YOLO and OCR in isolated memory spaces
+    # Each process gets its own memory, preventing cache thrashing and memory bandwidth competition
+    # Trade-off: ~50-100ms IPC overhead per request, but each task runs at full speed
+    # Options: "threading" (current default), "multiprocessing" (experimental)
+    CV_PARALLEL_MODE: str = "threading"  # "threading" or "multiprocessing" - using threading to test diagnostic mode
+
+    # Browser Chrome Cropping - crop out browser UI (tabs, toolbar, bookmarks) before CV analysis
+    # This reduces noise from browser elements and speeds up processing by ~20-30%
+    # 120px covers: tabs (~35px) + URL bar (~35px) + bookmarks bar (~40px)
+    CV_CROP_BROWSER_CHROME: bool = True  # Enabled to reduce browser UI noise in detections
+    CV_BROWSER_CHROME_HEIGHT: int = 120  # Pixels to crop from top (tabs + toolbar + bookmarks bar)
+
+    # Post-processing Filters - clean up low-quality detections
+    CV_FILTER_SINGLE_CHAR_LABELS: bool = False  # Remove single-character labels (icons misread as letters)
+    CV_FILTER_OCR_GARBAGE: bool = False  # Remove non-alphanumeric garbage labels
+    CV_MIN_LABEL_LENGTH: int = 2  # Minimum label length to keep
+
     # OpenVINO Settings (for YOLO acceleration)
-    OMNIPARSER_USE_OPENVINO: bool = False  # Disabled - OpenVINO causes StopIteration error on this system
+    OMNIPARSER_USE_OPENVINO: bool = True  # FP16 OpenVINO for 3-4x faster CPU inference
     OMNIPARSER_OPENVINO_HALF: bool = True  # Use FP16 precision
 
     # =============================================
@@ -165,7 +204,7 @@ class Settings(BaseSettings):
 
     # Guidance Generation Settings
     GUIDANCE_MAX_STEPS: int = 20
-    GUIDANCE_MATCH_THRESHOLD: float = 0.45  # Min similarity for element matching
+    GUIDANCE_MATCH_THRESHOLD: float = 0.25  # Min similarity for element matching
     GUIDANCE_RAG_TOP_K: int = 5  # Number of RAG results to include in context
 
     # Session Settings

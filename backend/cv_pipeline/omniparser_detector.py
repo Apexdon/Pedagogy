@@ -16,7 +16,7 @@ from typing import Dict, List, Optional, Tuple, Any
 
 import numpy as np
 
-from .data_classes import BoundingBox, UIElement, DetectionResult
+from .data_classes import BoundingBox, UIElement, DetectionResult, DetectionTiming
 
 
 # Global model cache for lazy loading
@@ -25,13 +25,14 @@ _icon_caption_model = None
 _icon_caption_processor = None
 
 
-def _get_icon_detect_model(model_path: str, use_openvino: bool = True):
+def _get_icon_detect_model(model_path: str, use_openvino: bool = True, use_int8: bool = False):
     """
     Get or load the icon detection model (YOLOv8) with caching.
 
     Args:
         model_path: Path to the YOLOv8 .pt model file
         use_openvino: Whether to export and use OpenVINO format for faster CPU inference
+        use_int8: Whether to use INT8 quantized model (requires model_int8_openvino_model/)
 
     Returns:
         Loaded YOLO model (OpenVINO or PyTorch)
@@ -43,13 +44,18 @@ def _get_icon_detect_model(model_path: str, use_openvino: bool = True):
         from ultralytics import YOLO
 
         if use_openvino:
-            # Use FP16 OpenVINO model (INT8 requires calibration dataset)
-            openvino_dir = model_path.replace('.pt', '_openvino_model')
+            # Check for INT8 model first (2-4x faster than FP16)
+            int8_dir = model_path.replace('.pt', '_int8_openvino_model')
+            fp16_dir = model_path.replace('.pt', '_openvino_model')
 
-            if os.path.isdir(openvino_dir):
-                # Load existing OpenVINO model
-                print(f"[OmniParser] Loading OpenVINO model from {openvino_dir}")
-                _icon_detect_model = YOLO(openvino_dir)
+            if use_int8 and os.path.isdir(int8_dir):
+                # Load INT8 quantized model
+                print(f"[OmniParser] Loading INT8 OpenVINO model from {int8_dir}")
+                _icon_detect_model = YOLO(int8_dir, task='detect')
+            elif os.path.isdir(fp16_dir):
+                # Load existing FP16 OpenVINO model
+                print(f"[OmniParser] Loading FP16 OpenVINO model from {fp16_dir}")
+                _icon_detect_model = YOLO(fp16_dir, task='detect')
             else:
                 # Export to OpenVINO FP16 format (one-time operation)
                 print(f"[OmniParser] Exporting {model_path} to OpenVINO format...")
@@ -57,7 +63,7 @@ def _get_icon_detect_model(model_path: str, use_openvino: bool = True):
                     pt_model = YOLO(model_path)
                     pt_model.export(format='openvino', half=True)
                     print(f"[OmniParser] OpenVINO export complete")
-                    _icon_detect_model = YOLO(openvino_dir)
+                    _icon_detect_model = YOLO(fp16_dir)
                 except Exception as e:
                     print(f"[OmniParser] OpenVINO export failed: {e}")
                     print(f"[OmniParser] Falling back to PyTorch model")
@@ -158,7 +164,8 @@ class OmniParserDetector:
         iou_threshold: float = 0.45,
         device: Optional[str] = None,
         enable_captioning: bool = True,
-        use_openvino: bool = True
+        use_openvino: bool = True,
+        use_int8: bool = False
     ):
         """
         Initialize the OmniParser detector.
@@ -171,6 +178,7 @@ class OmniParserDetector:
             device: Device to run on ("cpu", "cuda"). Auto-detected if None.
             enable_captioning: Whether to generate captions for detected elements
             use_openvino: Whether to use OpenVINO for faster CPU inference (3-4x speedup)
+            use_int8: Whether to use INT8 quantized model for even faster inference (2-4x over FP16)
         """
         self.icon_detect_path = icon_detect_path
         self.icon_caption_path = icon_caption_path
@@ -178,6 +186,7 @@ class OmniParserDetector:
         self.iou_threshold = iou_threshold
         self.enable_captioning = enable_captioning
         self.use_openvino = use_openvino
+        self.use_int8 = use_int8
 
         # Auto-detect device
         if device is None:
@@ -200,7 +209,8 @@ class OmniParserDetector:
         if self._detect_model is None:
             self._detect_model = _get_icon_detect_model(
                 self.icon_detect_path,
-                use_openvino=self.use_openvino
+                use_openvino=self.use_openvino,
+                use_int8=self.use_int8
             )
         return self._detect_model
 
@@ -246,15 +256,35 @@ class OmniParserDetector:
         print(f"[OmniParser] Detecting on image: {width}x{height}, conf={self.confidence_threshold}")
 
         # Run icon detection
+        # Only use half precision (FP16) if OpenVINO is enabled or using GPU
+        # FP16 on CPU without OpenVINO causes extreme slowdown (20+ minutes!)
+        use_half = self.use_openvino or self.device == "cuda"
+
         predict_start = time.perf_counter()
         results = self.detect_model.predict(
             image,
             conf=self.confidence_threshold,
             iou=self.iou_threshold,
-            verbose=False
+            verbose=False,
+            half=use_half,
+            max_det=100  # Limit detections (default 300) - UI screens rarely have >50 elements
         )
         predict_time = (time.perf_counter() - predict_start) * 1000
-        print(f"[OmniParser] YOLO predict() took {predict_time:.0f}ms")
+
+        # Extract Ultralytics timing breakdown (preprocess, inference, postprocess in ms)
+        detection_timing = None
+        if results and len(results) > 0 and hasattr(results[0], 'speed'):
+            speed = results[0].speed  # Dict with 'preprocess', 'inference', 'postprocess' in ms
+            detection_timing = DetectionTiming(
+                preprocess_ms=speed.get('preprocess', 0.0),
+                inference_ms=speed.get('inference', 0.0),
+                postprocess_ms=speed.get('postprocess', 0.0),
+                total_ms=speed.get('preprocess', 0.0) + speed.get('inference', 0.0) + speed.get('postprocess', 0.0)
+            )
+            print(f"[OmniParser] YOLO predict() took {predict_time:.0f}ms (half={use_half}) | "
+                  f"pre:{detection_timing.preprocess_ms:.0f}ms inf:{detection_timing.inference_ms:.0f}ms post:{detection_timing.postprocess_ms:.0f}ms")
+        else:
+            print(f"[OmniParser] YOLO predict() took {predict_time:.0f}ms (half={use_half})")
 
         elements: List[UIElement] = []
 
@@ -329,7 +359,8 @@ class OmniParserDetector:
             elements=elements,
             processing_time_ms=processing_time,
             model_name="omniparser-v2",
-            image_size=(width, height)
+            image_size=(width, height),
+            timing=detection_timing
         )
 
     def _generate_captions(
@@ -481,5 +512,6 @@ def create_omniparser_detector_from_settings(settings) -> OmniParserDetector:
         iou_threshold=settings.OMNIPARSER_IOU_THRESHOLD,
         device="cuda" if settings.OCR_USE_GPU else "cpu",
         enable_captioning=settings.OMNIPARSER_ENABLE_CAPTIONING,
-        use_openvino=getattr(settings, 'OMNIPARSER_USE_OPENVINO', True)
+        use_openvino=getattr(settings, 'OMNIPARSER_USE_OPENVINO', True),
+        use_int8=getattr(settings, 'OMNIPARSER_USE_INT8', False)
     )
